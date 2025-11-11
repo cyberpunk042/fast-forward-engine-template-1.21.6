@@ -3,7 +3,8 @@
 	"package": "net.cyberpunk042.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"mixins": [
-		"ExampleMixin"
+		"ExampleMixin",
+		"MinecraftServerInvoker"
 	],
 	"injectors": {
 		"defaultRequire": 1
