@@ -124,6 +124,7 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.GameRules;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -139,20 +140,37 @@ import org.slf4j.LoggerFactory;
 public class Fastforwardengine implements ModInitializer {
 	public static final String MOD_ID = "fast-forward-engine";
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+	public static Config CONFIG = new Config();
 
 	@Override
 	public void onInitialize() {
 		LOGGER.info("FastForward Engine initializing");
+		CONFIG = Config.loadOrCreate();
 
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			LiteralArgumentBuilder<CommandSourceStack> root = Commands.literal("fastforward")
-				.requires(source -> source.hasPermission(2))
+			.requires(source -> source.hasPermission(2) || source.getServer().isSingleplayer())
 				.then(Commands.argument("ticks", IntegerArgumentType.integer(1, 1_000_000_000))
 					.executes(ctx -> {
 						int ticks = IntegerArgumentType.getInteger(ctx, "ticks");
 						Engine.start(ctx, ticks);
 						return 1;
 					})
+				)
+				.then(Commands.literal("stop")
+					.executes(ctx -> {
+						Engine.stop(ctx.getSource().getServer(), ctx.getSource());
+						return 1;
+					})
+				)
+				.then(Commands.literal("config")
+					.then(Commands.literal("reload")
+						.executes(ctx -> {
+							CONFIG = Config.loadOrCreate();
+							ctx.getSource().sendSuccess(() -> Component.literal("FastForward config reloaded."), false);
+							return 1;
+						})
+					)
 				);
 			dispatcher.register(root);
 		});
@@ -169,8 +187,11 @@ public class Fastforwardengine implements ModInitializer {
 		private static long startMs = 0L;
 		private static CommandSourceStack replyTarget = null;
 		private static final java.util.Map<ServerLevel, Boolean> originalDoMobSpawning = new java.util.HashMap<>();
+		private static final java.util.Map<ServerLevel, Integer> originalRandomTick = new java.util.HashMap<>();
 		private static volatile boolean warpingNow = false;
 		private static final BooleanSupplier ALWAYS_TRUE = () -> true;
+		@SuppressWarnings("unchecked")
+		private static final GameRules.Key<GameRules.IntegerValue> RANDOM_TICK_KEY = resolveRandomTickKey();
 
 		private Engine() {}
 
@@ -192,11 +213,20 @@ public class Fastforwardengine implements ModInitializer {
 			server.execute(() -> {
 				synchronized (Engine.class) {
 					originalDoMobSpawning.clear();
+					originalRandomTick.clear();
 					for (ServerLevel level : server.getAllLevels()) {
 						setClearWeather(level);
-						var rule = level.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DOMOBSPAWNING);
+						var rule = level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING);
 						originalDoMobSpawning.put(level, rule.get());
 						rule.set(false, server);
+						// Optional random tick speed override
+						if (Fastforwardengine.CONFIG.randomTickSpeedOverride != null && RANDOM_TICK_KEY != null) {
+							try {
+								var rts = level.getGameRules().getRule(RANDOM_TICK_KEY);
+								originalRandomTick.put(level, rts.get());
+								rts.set(Fastforwardengine.CONFIG.randomTickSpeedOverride, server);
+							} catch (Throwable ignored) {}
+						}
 					}
 					remainingTicks = ticks;
 					totalTicks = ticks;
@@ -213,7 +243,8 @@ public class Fastforwardengine implements ModInitializer {
 
 			warpingNow = true;
 			try {
-				long batch = Math.min(remainingTicks, 1000L); // do up to 1000 extra ticks per server tick
+				int batchCfg = Math.max(1, Fastforwardengine.CONFIG.batchSizePerServerTick);
+				long batch = Math.min(remainingTicks, (long)batchCfg); // up to configured extra ticks per server tick
 				final net.cyberpunk042.mixin.MinecraftServerInvoker invoker = (net.cyberpunk042.mixin.MinecraftServerInvoker)(Object)server;
 				for (long i = 0; i < batch; i++) {
 					try {
@@ -237,11 +268,21 @@ public class Fastforwardengine implements ModInitializer {
 					try {
 						Boolean v = originalDoMobSpawning.get(level);
 						if (v != null) {
-							level.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DOMOBSPAWNING).set(v, server);
+							level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING).set(v, server);
+						}
+						// Restore random tick speed if we changed it
+						if (RANDOM_TICK_KEY != null) {
+							Integer r = originalRandomTick.get(level);
+							if (r != null) {
+								try {
+									level.getGameRules().getRule(RANDOM_TICK_KEY).set(r, server);
+								} catch (Throwable ignored) {}
+							}
 						}
 					} catch (Throwable ignored) {}
 				}
 				originalDoMobSpawning.clear();
+				originalRandomTick.clear();
 				// Save
 				try {
 					server.saveEverything(false, true, true);
@@ -267,6 +308,36 @@ public class Fastforwardengine implements ModInitializer {
 			} catch (Throwable ignored) {}
 		}
 
+		static void stop(MinecraftServer server, CommandSourceStack source) {
+			server.execute(() -> {
+				if (!running) {
+					source.sendFailure(Component.literal("Fast-forward is not running."));
+					return;
+				}
+				long remaining = remainingTicks;
+				remainingTicks = 0;
+				source.sendSuccess(() -> Component.literal("Stopping fast-forward (remaining " + remaining + " ticks)."), false);
+			});
+		}
+
 		private static java.lang.reflect.Method resolveTickMethod(MinecraftServer server) { return null; }
+
+		@SuppressWarnings("unchecked")
+		private static GameRules.Key<GameRules.IntegerValue> resolveRandomTickKey() {
+			try {
+				var f = GameRules.class.getDeclaredField("RULE_RANDOM_TICK_SPEED");
+				f.setAccessible(true);
+				return (GameRules.Key<GameRules.IntegerValue>) f.get(null);
+			} catch (NoSuchFieldException | IllegalAccessException e) {
+				try {
+					// Try alternate name if mappings differ
+					var f2 = GameRules.class.getDeclaredField("RANDOM_TICK_SPEED");
+					f2.setAccessible(true);
+					return (GameRules.Key<GameRules.IntegerValue>) f2.get(null);
+				} catch (NoSuchFieldException | IllegalAccessException ignored) {
+					return null;
+				}
+			}
+		}
 	}
 }

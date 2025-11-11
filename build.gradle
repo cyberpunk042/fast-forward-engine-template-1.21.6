@@ -21,6 +21,11 @@ repositories {
 loom {
 	splitEnvironmentSourceSets()
 
+	mixin {
+		defaultRefmapName = "fast-forward-engine.refmap.json"
+		useLegacyMixinAp = true
+	}
+
 	mods {
 		"fast-forward-engine" {
 			sourceSet sourceSets.main
@@ -38,7 +43,7 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-	
+
 }
 
 processResources {
