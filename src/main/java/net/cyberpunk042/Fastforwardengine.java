@@ -1,5 +1,6 @@
 package net.cyberpunk042;
 
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -56,7 +57,66 @@ public class Fastforwardengine implements ModInitializer {
 							 ctx.getSource().sendSuccess(() -> Component.literal("hopperTransfersPerTick set to " + rate), false);
 							 return 1;
 						 }))
+						 .then(Commands.literal("always")
+							 .then(Commands.argument("value", BoolArgumentType.bool()).executes(ctx -> {
+								 boolean value = BoolArgumentType.getBool(ctx, "value");
+								 CONFIG.hopperAlwaysOn = value;
+								 CONFIG.save();
+								 ctx.getSource().sendSuccess(() -> Component.literal("hopperAlwaysOn set to " + value), false);
+								 return 1;
+							 }))
+						 )
 					 )
+				 )
+				 .then(Commands.literal("profile")
+					 .then(Commands.literal("start").executes(ctx -> {
+						 CommandSourceStack src = ctx.getSource();
+						 MinecraftServer server = src.getServer();
+						 server.execute(() -> {
+							 if (Engine.profiling) {
+								 src.sendSuccess(() -> Component.literal("Profiler already running."), false);
+							 } else {
+								 ServerLevel overworld = server.overworld();
+								 long gt = 0L;
+								 try {
+									 gt = overworld.getLevelData().getGameTime();
+								 } catch (Throwable ignored) {
+									 // fallback if needed
+								 }
+								 Engine.profiling = true;
+								 Engine.profileStartWallNs = System.nanoTime();
+								 Engine.profileStartGameTime = gt;
+								 src.sendSuccess(() -> Component.literal("Profiler started."), false);
+							 }
+						 });
+						 return 1;
+					 }))
+					 .then(Commands.literal("stop").executes(ctx -> {
+						 CommandSourceStack src = ctx.getSource();
+						 MinecraftServer server = src.getServer();
+						 server.execute(() -> {
+							 if (!Engine.profiling) {
+								 src.sendSuccess(() -> Component.literal("Profiler is not running."), false);
+							 } else {
+								 ServerLevel overworld = server.overworld();
+								 long gtNow = 0L;
+								 try {
+									 gtNow = overworld.getLevelData().getGameTime();
+								 } catch (Throwable ignored) {}
+								 long wallNs = System.nanoTime() - Engine.profileStartWallNs;
+								 long ticks = Math.max(0L, gtNow - Engine.profileStartGameTime);
+								 double seconds = wallNs / 1_000_000_000.0;
+								 double tps = seconds > 0 ? ticks / seconds : 0.0;
+								 Engine.profiling = false;
+								 src.sendSuccess(() -> Component.literal(
+									 "Profile: " + ticks + " ticks in " + (long)(seconds * 1000) + " ms (" +
+										 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS), in-game +"
+										 + ticks + " ticks (~" + (ticks / 20) + " s)"
+								 ), false);
+							 }
+						 });
+						 return 1;
+					 }))
 				 );
 			 dispatcher.register(root);
 		 });
@@ -74,6 +134,10 @@ public class Fastforwardengine implements ModInitializer {
 		 return Engine.getHopperTransfersPerTick();
 	 }
 
+	 public static boolean isHopperBoostAlwaysOn() {
+		 return CONFIG.hopperAlwaysOn;
+	 }
+
 	 static final class Engine {
 		 private static volatile boolean running = false;
 		 private static volatile boolean warping = false;
@@ -87,6 +151,11 @@ public class Fastforwardengine implements ModInitializer {
 		 private static final BooleanSupplier ONE_TICK_ONLY = () -> false;
 		 @SuppressWarnings("unchecked")
 		 private static final GameRules.Key<GameRules.IntegerValue> RANDOM_TICK_KEY = resolveRandomTickKey();
+
+		 // profiler
+		 static volatile boolean profiling = false;
+		 static volatile long profileStartWallNs = 0L;
+		 static volatile long profileStartGameTime = 0L;
 
 		 static boolean isRunning() {
 			 return running;

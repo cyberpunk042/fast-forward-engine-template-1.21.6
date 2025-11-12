@@ -23,6 +23,9 @@ public final class Config {
 	@SerializedName("hopperTransfersPerTick")
 	public int hopperTransfersPerTick = 1; // 1 = vanilla, >1 = accelerate hopper IO per tick during fast-forward
 
+	@SerializedName("hopperAlwaysOn")
+	public boolean hopperAlwaysOn = false; // true = apply hopperTransfersPerTick even outside fast-forward
+
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
 	public static Config loadOrCreate() {
