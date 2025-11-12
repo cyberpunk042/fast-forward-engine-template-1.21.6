@@ -49,6 +49,19 @@ public class Fastforwardengine implements ModInitializer {
 						 ctx.getSource().sendSuccess(() -> Component.literal("FastForward config reloaded"), false);
 						 return 1;
 					 }))
+					 .then(Commands.literal("show").executes(ctx -> {
+						 String json = CONFIG.toPrettyJson();
+						 for (String line : json.split("\n")) {
+							 ctx.getSource().sendSuccess(() -> Component.literal(line), false);
+						 }
+						 return 1;
+					 }))
+					 .then(Commands.literal("reset").executes(ctx -> {
+						 CONFIG = new Config();
+						 CONFIG.save();
+						 ctx.getSource().sendSuccess(() -> Component.literal("FastForward config reset to defaults"), false);
+						 return 1;
+					 }))
 					 .then(Commands.literal("hopper")
 						 .then(Commands.argument("rate", IntegerArgumentType.integer(1, 64)).executes(ctx -> {
 							 int rate = IntegerArgumentType.getInteger(ctx, "rate");

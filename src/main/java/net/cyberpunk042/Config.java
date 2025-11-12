@@ -102,6 +102,10 @@ public final class Config {
 			Fastforwardengine.LOGGER.warn("Failed to save config", e);
 		}
 	}
+
+	public String toPrettyJson() {
+		return GSON.toJson(this);
+	}
 }
 
 
