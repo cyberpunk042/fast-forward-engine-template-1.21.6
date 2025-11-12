@@ -6,7 +6,11 @@
 	"mixins": [
 		"ExampleMixin",
 		"MinecraftServerInvoker",
-		"HopperBlockEntityMixin"
+		"HopperBlockEntityMixin",
+		"AbstractFurnaceBlockEntityMixin",
+		"ComposterBlockMixin",
+		"DispenserBlockMixin",
+		"EntityMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

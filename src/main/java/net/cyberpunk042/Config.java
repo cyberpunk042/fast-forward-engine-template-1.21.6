@@ -26,6 +26,42 @@ public final class Config {
 	@SerializedName("hopperAlwaysOn")
 	public boolean hopperAlwaysOn = false; // true = apply hopperTransfersPerTick even outside fast-forward
 
+	@SerializedName("experimentalAggressiveWarp")
+	public boolean experimentalAggressiveWarp = false; // run extra ticks up to a time budget each server tick
+
+	@SerializedName("experimentalMaxWarpMillisPerServerTick")
+	public int experimentalMaxWarpMillisPerServerTick = 200; // time budget per server tick when aggressive warp is enabled
+
+	@SerializedName("furnaceTicksPerTick")
+	public int furnaceTicksPerTick = 1; // 1 = vanilla, >1 = accelerate furnace/smoker/blast-furnace processing
+
+	@SerializedName("furnaceAlwaysOn")
+	public boolean furnaceAlwaysOn = false; // true = apply furnaceTicksPerTick outside fast-forward
+
+	@SerializedName("redstoneExperimentalEnabled")
+	public boolean redstoneExperimentalEnabled = false;
+
+	@SerializedName("redstonePassesPerServerTick")
+	public int redstonePassesPerServerTick = 1; // extra full world passes when enabled (outside fast-forward)
+
+	@SerializedName("redstoneAlwaysOn")
+	public boolean redstoneAlwaysOn = false; // apply redstone passes even when not fast-forwarding
+
+	@SerializedName("redstoneSkipEntityTicks")
+	public boolean redstoneSkipEntityTicks = true; // during experimental redstone passes, skip entity ticks
+
+	@SerializedName("composterTicksPerTick")
+	public int composterTicksPerTick = 1; // extra composter tick passes when enabled
+
+	@SerializedName("composterAlwaysOn")
+	public boolean composterAlwaysOn = false;
+
+	@SerializedName("dropperShotsPerPulse")
+	public int dropperShotsPerPulse = 1; // extra dispense attempts per scheduled tick
+
+	@SerializedName("dropperAlwaysOn")
+	public boolean dropperAlwaysOn = false;
+
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
 	public static Config loadOrCreate() {

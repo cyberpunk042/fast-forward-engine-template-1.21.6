@@ -22,6 +22,7 @@ abstract class HopperBlockEntityMixin {
 	@Inject(method = "pushItemsTick", at = @At("TAIL"))
 	private static void fastforwardengine$boostTransfers(Level level, BlockPos pos, BlockState state, HopperBlockEntity hopper, CallbackInfo ci) {
 		if (fastforwardengine$reenterGuard) return;
+		if (Fastforwardengine.isPaused()) return;
 		boolean active = Fastforwardengine.isFastForwardRunning() || Fastforwardengine.isHopperBoostAlwaysOn();
 		if (!active) return;
 		int extra = Fastforwardengine.hopperTransfersPerTick() - 1;
