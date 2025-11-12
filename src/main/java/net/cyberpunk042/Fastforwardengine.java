@@ -320,6 +320,41 @@ public class Fastforwardengine implements ModInitializer {
 							 }))
 						 )
 					 )
+					 .then(Commands.literal("fixlag")
+						 .then(Commands.literal("on").executes(ctx -> {
+							 CONFIG.fixLagEnabled = true;
+							 CONFIG.suppressLagWarningsDuringWarp = true;
+							 if (CONFIG.fixLagExtraTicksPerServerTick <= 0) {
+								 CONFIG.fixLagExtraTicksPerServerTick = 20;
+							 }
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("fixlag enabled (extraTicksPerTick=" + CONFIG.fixLagExtraTicksPerServerTick + ")"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("off").executes(ctx -> {
+							 CONFIG.fixLagEnabled = false;
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("fixlag disabled"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("passes")
+							 .then(Commands.argument("count", IntegerArgumentType.integer(0, 200)).execute s(ctx -> {
+								 int count = IntegerArgumentType.getInteger(ctx, "count");
+								 CONFIG.fixLagExtraTicksPerServerTick = count;
+								 CONFIG.save();
+								 ctx.getSource().sendSuccess(() -> Component.literal("fixLag extra ticks per server tick set to " + count), false);
+								 return 1;
+							 }))
+						 )
+						 .then(Commands.literal("status").executes(ctx -> {
+							 ctx.getSource().sendSuccess(() -> Component.literal(
+								 "fixLagEnabled=" + CONFIG.fixLagEnabled +
+								 ", extraTicksPerTick=" + CONFIG.fixLagExtraTicksPerServerTick +
+								 ", suppressLagWarnings=" + CONFIG.suppressLagWarningsDuringWarp
+							 ), false);
+							 return 1;
+						 }))
+					 )
 				 )
 				 .then(Commands.literal("profile")
 					 .then(Commands.literal("start").executes(ctx -> {
@@ -337,8 +372,7 @@ public class Fastforwardengine implements ModInitializer {
 									 // fallback if needed
 								 }
 								 Engine.profiling = true;
-								 Engine.profileStartWallNs = System.nanoTime();
-								 Engine.profileStartGameTime = gt;
+								 Engine.profilingBegin(System.nanoTime(), gt);
 								 src.sendSuccess(() -> Component.literal("Profiler started."), false);
 							 }
 						 });
@@ -363,8 +397,8 @@ public class Fastforwardengine implements ModInitializer {
 								 Engine.profiling = false;
 								 src.sendSuccess(() -> Component.literal(
 									 "Profile: " + ticks + " ticks in " + (long)(seconds * 1000) + " ms (" +
-										 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS), in-game +"
-										 + ticks + " ticks (~" + (ticks / 20) + " s)"
+										 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS), in-game +" +
+										 ticks + " ticks (~" + (ticks / 20) + " s)" + Engine.summaryTail()
 								 ), false);
 							 }
 						 });
@@ -389,16 +423,19 @@ public class Fastforwardengine implements ModInitializer {
 								 applyPresetLow(CONFIG);
 								 final long startNs = System.nanoTime();
 								 final long startGt = server.overworld().getLevelData().getGameTime();
+								 // enable profiling for quick run
+								 Engine.profilingBegin(startNs, startGt);
 								 Engine.setAfterFinishHook(() -> {
 									 long wallNs = System.nanoTime() - startNs;
 									 long gtNow = server.overworld().getLevelData().getGameTime();
 									 long dt = Math.max(0L, gtNow - startGt);
 									 double sec = wallNs / 1_000_000_000.0;
 									 double tps = sec > 0 ? dt / sec : 0.0;
+									 Engine.profiling = false;
 									 CONFIG = prev;
 									 src.sendSuccess(() -> Component.literal(
 										 "Quick profile (LOW): " + dt + " ticks in " + (long)(sec * 1000) + " ms (" +
-											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)"
+											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)" + Engine.summaryTail()
 									 ), false);
 								 });
 								 Engine.start(src, ticks);
@@ -420,16 +457,19 @@ public class Fastforwardengine implements ModInitializer {
 								 applyPresetMedium(CONFIG);
 								 final long startNs = System.nanoTime();
 								 final long startGt = server.overworld().getLevelData().getGameTime();
+								 // enable profiling for quick run
+								 Engine.profilingBegin(startNs, startGt);
 								 Engine.setAfterFinishHook(() -> {
 									 long wallNs = System.nanoTime() - startNs;
 									 long gtNow = server.overworld().getLevelData().getGameTime();
 									 long dt = Math.max(0L, gtNow - startGt);
 									 double sec = wallNs / 1_000_000_000.0;
 									 double tps = sec > 0 ? dt / sec : 0.0;
+									 Engine.profiling = false;
 									 CONFIG = prev;
 									 src.sendSuccess(() -> Component.literal(
 										 "Quick profile (MEDIUM): " + dt + " ticks in " + (long)(sec * 1000) + " ms (" +
-											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)"
+											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)" + Engine.summaryTail()
 									 ), false);
 								 });
 								 Engine.start(src, ticks);
@@ -451,16 +491,19 @@ public class Fastforwardengine implements ModInitializer {
 									 applyPresetHigh(CONFIG);
 									 final long startNs = System.nanoTime();
 									 final long startGt = server.overworld().getLevelData().getGameTime();
+									 // enable profiling for quick run
+									 Engine.profilingBegin(startNs, startGt);
 									 Engine.setAfterFinishHook(() -> {
 										 long wallNs = System.nanoTime() - startNs;
 										 long gtNow = server.overworld().getLevelData().getGameTime();
 										 long dt = Math.max(0L, gtNow - startGt);
 										 double sec = wallNs / 1_000_000_000.0;
 										 double tps = sec > 0 ? dt / sec : 0.0;
+										 Engine.profiling = false;
 										 CONFIG = prev;
 										 src.sendSuccess(() -> Component.literal(
 											 "Quick profile (HIGH): " + dt + " ticks in " + (long)(sec * 1000) + " ms (" +
-												 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)"
+												 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)" + Engine.summaryTail()
 										 ), false);
 									 });
 									 Engine.start(src, ticks);
@@ -482,16 +525,19 @@ public class Fastforwardengine implements ModInitializer {
 								 applyPresetUltra(CONFIG);
 								 final long startNs = System.nanoTime();
 								 final long startGt = server.overworld().getLevelData().getGameTime();
+								 // enable profiling for quick run
+								 Engine.profilingBegin(startNs, startGt);
 								 Engine.setAfterFinishHook(() -> {
 									 long wallNs = System.nanoTime() - startNs;
 									 long gtNow = server.overworld().getLevelData().getGameTime();
 									 long dt = Math.max(0L, gtNow - startGt);
 									 double sec = wallNs / 1_000_000_000.0;
 									 double tps = sec > 0 ? dt / sec : 0.0;
+									 Engine.profiling = false;
 									 CONFIG = prev;
 									 src.sendSuccess(() -> Component.literal(
 										 "Quick profile (ULTRA): " + dt + " ticks in " + (long)(sec * 1000) + " ms (" +
-											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)"
+											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)" + Engine.summaryTail()
 									 ), false);
 								 });
 								 Engine.start(src, ticks);
@@ -606,6 +652,22 @@ public class Fastforwardengine implements ModInitializer {
 		 return Engine.ensurePrecomputeExec();
 	 }
 
+	 // Save phase facade
+	 public static boolean isFinalSavePhase() { return Engine.finalSavePhase; }
+
+	 // Profiling facade for mixins
+	 public static boolean isProfiling() { return Engine.profiling; }
+	 public static void profileCountEntityCreated() { Engine.profEntitiesCreated++; }
+	 public static void profileAddFurnaceOutputs(int delta) { if (delta > 0) Engine.profFurnaceOutputs += delta; }
+	 public static void profileCountComposterOutput() { Engine.profComposterOutputs++; }
+	 public static void profileAddChestItemsInserted(int delta) { if (delta > 0) Engine.profChestItemsInserted += delta; }
+	 public static void profileAddCrafted(int delta) { if (delta > 0) Engine.profCraftedItems += delta; }
+	 public static void profileAddHopperPulled(int delta) { if (delta > 0) Engine.profHopperPulled += delta; }
+	 public static void profileAddHopperPushed(int delta) { if (delta > 0) Engine.profHopperPushed += delta; }
+	 public static void profileAddShulkerItemsInserted(int delta) { if (delta > 0) Engine.profShulkerItemsInserted += delta; }
+	 public static void profileIncDispenserShots() { Engine.profDispenserShots++; }
+	 public static void profileIncDropperDrops() { Engine.profDropperDrops++; }
+
 	 // Generic config get/set helpers
 	 private static String getConfigValueAsString(String key) {
 		 return switch (key) {
@@ -615,6 +677,9 @@ public class Fastforwardengine implements ModInitializer {
 			 case "experimentalMaxWarpMillisPerServerTick" -> String.valueOf(CONFIG.experimentalMaxWarpMillisPerServerTick);
 			 case "experimentalBackgroundPrecompute" -> String.valueOf(CONFIG.experimentalBackgroundPrecompute);
 			 case "clientHeadlessDuringWarp" -> String.valueOf(CONFIG.clientHeadlessDuringWarp);
+			 case "suppressLagWarningsDuringWarp" -> String.valueOf(CONFIG.suppressLagWarningsDuringWarp);
+			 case "fixLagEnabled" -> String.valueOf(CONFIG.fixLagEnabled);
+			 case "fixLagExtraTicksPerServerTick" -> String.valueOf(CONFIG.fixLagExtraTicksPerServerTick);
 			 case "hopperTransfersPerTick" -> String.valueOf(CONFIG.hopperTransfersPerTick);
 			 case "hopperAlwaysOn" -> String.valueOf(CONFIG.hopperAlwaysOn);
 			 case "furnaceTicksPerTick" -> String.valueOf(CONFIG.furnaceTicksPerTick);
@@ -644,6 +709,7 @@ public class Fastforwardengine implements ModInitializer {
 				 case "experimentalAggressiveWarp" -> CONFIG.experimentalAggressiveWarp = Boolean.parseBoolean(raw);
 				 case "experimentalMaxWarpMillisPerServerTick" -> CONFIG.experimentalMaxWarpMillisPerServerTick = Integer.parseInt(raw);
 				 case "experimentalBackgroundPrecompute" -> CONFIG.experimentalBackgroundPrecompute = Boolean.parseBoolean(raw);
+				 case "suppressLagWarningsDuringWarp" -> CONFIG.suppressLagWarningsDuringWarp = Boolean.parseBoolean(raw);
 				 case "hopperTransfersPerTick" -> CONFIG.hopperTransfersPerTick = Integer.parseInt(raw);
 				 case "hopperAlwaysOn" -> CONFIG.hopperAlwaysOn = Boolean.parseBoolean(raw);
 				 case "furnaceTicksPerTick" -> CONFIG.furnaceTicksPerTick = Integer.parseInt(raw);
@@ -659,6 +725,8 @@ public class Fastforwardengine implements ModInitializer {
 				 case "dropperAlwaysOn" -> CONFIG.dropperAlwaysOn = Boolean.parseBoolean(raw);
 				 case "suppressPlayerTicksDuringWarp" -> CONFIG.suppressPlayerTicksDuringWarp = Boolean.parseBoolean(raw);
 				 case "experimentalClientHeadless" -> CONFIG.experimentalClientHeadless = Boolean.parseBoolean(raw);
+				 case "fixLagEnabled" -> CONFIG.fixLagEnabled = Boolean.parseBoolean(raw);
+				 case "fixLagExtraTicksPerServerTick" -> CONFIG.fixLagExtraTicksPerServerTick = Integer.parseInt(raw);
 				 default -> { return false; }
 			 }
 			 return true;
@@ -781,6 +849,49 @@ public class Fastforwardengine implements ModInitializer {
 		 static volatile boolean profiling = false;
 		 static volatile long profileStartWallNs = 0L;
 		 static volatile long profileStartGameTime = 0L;
+		 static volatile long profEntitiesCreated = 0L;
+		 static volatile long profFurnaceOutputs = 0L;
+		 static volatile long profComposterOutputs = 0L;
+		 static volatile long profChestItemsInserted = 0L;
+		 static volatile long profCraftedItems = 0L;
+		 static volatile long profHopperPulled = 0L;
+		 static volatile long profHopperPushed = 0L;
+		 static volatile long profShulkerItemsInserted = 0L;
+		 static volatile long profDispenserShots = 0L;
+		 static volatile long profDropperDrops = 0L;
+
+		 static void profilingResetCounters() {
+			 profEntitiesCreated = 0L;
+			 profFurnaceOutputs = 0L;
+			 profComposterOutputs = 0L;
+			 profChestItemsInserted = 0L;
+			 profCraftedItems = 0L;
+			 profHopperPulled = 0L;
+			 profHopperPushed = 0L;
+			 profShulkerItemsInserted = 0L;
+			 profDispenserShots = 0L;
+			 profDropperDrops = 0L;
+		 }
+
+		 static void profilingBegin(long startNs, long startGt) {
+			 profiling = true;
+			 profilingResetCounters();
+			 profileStartWallNs = startNs;
+			 profileStartGameTime = startGt;
+		 }
+
+		 static String summaryTail() {
+			 return " | entities+ " + profEntitiesCreated +
+				 " | smelted " + profFurnaceOutputs +
+				 " | composted " + profComposterOutputs +
+				 " | chest+ " + profChestItemsInserted +
+				 " | crafted+ " + profCraftedItems +
+				 " | hopper pull+ " + profHopperPulled +
+				 " | hopper push+ " + profHopperPushed +
+				 " | shulker+ " + profShulkerItemsInserted +
+				 " | dispenser shots " + profDispenserShots +
+				 " | dropper drops " + profDropperDrops;
+		 }
 
 		 static boolean isRunning() {
 		return running;
@@ -805,6 +916,7 @@ public class Fastforwardengine implements ModInitializer {
 		 private static volatile Runnable afterFinishHook = null;
 
 		 private static volatile ExecutorService precomputeExec = null;
+		 private static volatile boolean finalSavePhase = false;
 
 		 static ExecutorService ensurePrecomputeExec() {
 			 if (precomputeExec == null) {
@@ -843,16 +955,16 @@ public class Fastforwardengine implements ModInitializer {
 							 var pl = server.getPlayerList();
 							 try { savedView = (Integer) pl.getClass().getMethod("getViewDistance").invoke(pl); } catch (Throwable ignored) {}
 							 try { pl.getClass().getMethod("setViewDistance", int.class).invoke(pl, 2); } catch (Throwable ignored) {}
-						 } catch (Throwable ignored) {}
-					 }
+		} catch (Throwable ignored) {}
+	}
 					 // stash in replyTarget holder to restore later via hook
 					 if (savedView != null) {
 						 final Integer fv = savedView;
 						 Runnable restore = () -> {
-							 try {
+				try {
 								 var pl = server.getPlayerList();
 								 if (fv != null) { try { pl.getClass().getMethod("setViewDistance", int.class).invoke(pl, fv); } catch (Throwable ignored) {} }
-							 } catch (Throwable ignored) {}
+				} catch (Throwable ignored) {}
 						 };
 						 // chain any existing afterFinishHook
 						 if (afterFinishHook != null) {
@@ -876,9 +988,9 @@ public class Fastforwardengine implements ModInitializer {
 								 GameRules.IntegerValue rts = level.getGameRules().getRule(RANDOM_TICK_KEY);
 								 originalRandomTick.put(level, rts.get());
 								 rts.set(CONFIG.randomTickSpeedOverride, server);
-			} catch (Throwable ignored) {}
-		}
-	}
+						} catch (Throwable ignored) {}
+					}
+				}
 					 remainingTicks = ticks;
 					 totalTicks = ticks;
 					 startedAtMs = System.currentTimeMillis();
@@ -936,7 +1048,12 @@ public class Fastforwardengine implements ModInitializer {
 							 if (!levels.isEmpty()) {
 								 for (ServerLevel lvl : levels) {
 									 try {
-										 ((ServerLevelInvoker)(Object)lvl).fastforwardengine$invokeTick(ONE_TICK_ONLY);
+										 if (CONFIG.suppressLagWarningsDuringWarp) {
+											 // Use full server tick to advance scheduler time and avoid "can't keep up" spam
+											 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
+										 } else {
+											 ((ServerLevelInvoker)(Object)lvl).fastforwardengine$invokeTick(ONE_TICK_ONLY);
+										 }
 									 } catch (Throwable t) {
 										 net.cyberpunk042.Fastforwardengine.LOGGER.warn("Scoped world tick failed", t);
 									 }
@@ -944,16 +1061,24 @@ public class Fastforwardengine implements ModInitializer {
 							 } else {
 								 // fallback to server-wide tick if no match
 								 try {
-									 inv.fastforwardengine$invokeTickChildren(ONE_TICK_ONLY);
-								 } catch (Throwable ignored) {
+									 if ( CONFIG.suppressLagWarningsDuringWarp) {
+										 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
+									 } else {
+										 inv.fastforwardengine$invokeTickChildren(ONE_TICK_ONLY);
+									 }
+		} catch (Throwable ignored) {
 									 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
 								 }
 							 }
 						 } else {
 							 try {
 								 // Default: tick all worlds
-								 inv.fastforwardengine$invokeTickChildren(ONE_TICK_ONLY);
-							 } catch (Throwable ignored) {
+								 if (CONFIG.suppressLagWarningsDuringWarp) {
+									 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
+								 } else {
+									 inv.fastforwardengine$invokeTickChildren(ONE_TICK_ONLY);
+								 }
+		} catch (Throwable ignored) {
 								 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
 							 }
 						 }
@@ -961,8 +1086,8 @@ public class Fastforwardengine implements ModInitializer {
 						 i++;
 						 if (aggressive && System.nanoTime() >= endNs) {
 							 break;
-						 }
-					 } catch (Throwable t) {
+			}
+		} catch (Throwable t) {
 						 net.cyberpunk042.Fastforwardengine.LOGGER.error("Fast-forward tick failed", t);
 						 break;
 					 }
@@ -1013,9 +1138,12 @@ public class Fastforwardengine implements ModInitializer {
 				 originalDoMobSpawning.clear();
 				 originalRandomTick.clear();
 				 try {
+					 finalSavePhase = true;
 					 server.saveEverything(false, true, true);
 				 } catch (Throwable t) {
 					 net.cyberpunk042.Fastforwardengine.LOGGER.warn("Server save failed", t);
+				 } finally {
+					 finalSavePhase = false;
 				 }
 				 // Re-enable auto-saving after warp
 				 try {

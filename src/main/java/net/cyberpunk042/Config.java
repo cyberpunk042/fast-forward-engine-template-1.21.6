@@ -62,6 +62,15 @@ public final class Config {
 	@SerializedName("clientHeadlessDuringWarp")
 	public boolean clientHeadlessDuringWarp = true; // in integrated SP, reduce client render load during warp
 
+	@SerializedName("suppressLagWarningsDuringWarp")
+	public boolean suppressLagWarningsDuringWarp = true; // suppress/avoid "Can't keep up!" spam while warping
+
+	@SerializedName("fixLagEnabled")
+	public boolean fixLagEnabled = false; // run extra server ticks each tick to catch up even when not warping
+
+	@SerializedName("fixLagExtraTicksPerServerTick")
+	public int fixLagExtraTicksPerServerTick = 0; // number of extra server tick() invocations per server tick when fixLagEnabled
+
 	@SerializedName("experimentalClientHeadless")
 	public boolean experimentalClientHeadless = false; // gate client headless under experimental flag
 

@@ -15,6 +15,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 abstract class AbstractFurnaceBlockEntityMixin {
 
 	private static java.lang.reflect.Method fastforwardengine$serverTickReflect;
+	private static final java.util.WeakHashMap<AbstractFurnaceBlockEntity, Integer> fastforwardengine$lastOut = new java.util.WeakHashMap<>();
 	private static void fastforwardengine$callServerTick(Level level, BlockPos pos, BlockState state, AbstractFurnaceBlockEntity be) {
 		try {
 			if (fastforwardengine$serverTickReflect == null) {
@@ -31,6 +32,17 @@ abstract class AbstractFurnaceBlockEntityMixin {
 
 	@Inject(method = "serverTick", at = @At("TAIL"))
 	private static void fastforwardengine$boostFurnace(ServerLevel level, BlockPos pos, BlockState state, AbstractFurnaceBlockEntity be, CallbackInfo ci) {
+		// Profiling: count smelt outputs via output slot delta (index 2)
+		if (net.cyberpunk042.Fastforwardengine.isProfiling()) {
+			try {
+				int curr = be.getItem(2).getCount();
+				Integer prev = fastforwardengine$lastOut.get(be);
+				if (prev != null && curr > prev) {
+					net.cyberpunk042.Fastforwardengine.profileAddFurnaceOutputs(curr - prev);
+				}
+				fastforwardengine$lastOut.put(be, curr);
+			} catch (Throwable ignored) {}
+		}
 		if (fastforwardengine$reenterGuard) return;
 		if (Fastforwardengine.isPaused()) return;
 		boolean active = Fastforwardengine.isFastForwardRunning() || Fastforwardengine.isFurnaceBoostAlwaysOn();

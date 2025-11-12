@@ -24,6 +24,8 @@ abstract class DispenserBlockMixin {
 
 	@Inject(method = "tick(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/core/BlockPos;Lnet/minecraft/util/RandomSource;)V", at = @At("TAIL"))
 	private void fastforwardengine$extraShots(BlockState state, ServerLevel level, BlockPos pos, RandomSource random, CallbackInfo ci) {
+		// Count the vanilla shot
+		try { net.cyberpunk042.Fastforwardengine.profileIncDispenserShots(); } catch (Throwable ignored) {}
 		if (fastforwardengine$reenterGuard) return;
 		if (Fastforwardengine.isPaused()) return;
 		boolean active = Fastforwardengine.isFastForwardRunning() || Fastforwardengine.CONFIG.dropperAlwaysOn;
@@ -58,6 +60,7 @@ abstract class DispenserBlockMixin {
 						try {
 							RandomSource r = (seeds != null) ? RandomSource.create(seeds[i]) : random;
 							fastforwardengine$tickReflect.invoke((DispenserBlock)(Object)this, state, level, pos, r);
+							net.cyberpunk042.Fastforwardengine.profileIncDispenserShots();
 						} catch (Throwable ignored) {
 							break;
 						}
@@ -75,6 +78,7 @@ abstract class DispenserBlockMixin {
 				for (int i = 0; i < extra; i++) {
 					try {
 						fastforwardengine$dispenseFromReflect.invoke((DispenserBlock)(Object)this, level, state, pos);
+						net.cyberpunk042.Fastforwardengine.profileIncDispenserShots();
 					} catch (Throwable ignored) {
 						break;
 					}

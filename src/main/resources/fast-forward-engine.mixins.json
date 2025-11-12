@@ -18,7 +18,11 @@
 		"ServerScoreboardMixin",
 		"PlayerAdvancementsMixin",
 		"ServerStatsCounterMixin",
-		"RecipeManagerMixin"
+		"RecipeManagerMixin",
+		"ServerLevelEntityCallbacksMixin",
+		"ResultSlotMixin",
+		"ServerLevelItemSpawnMixin",
+		"DropperBlockMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
