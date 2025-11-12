@@ -49,6 +49,52 @@ public class Fastforwardengine implements ModInitializer {
 						 ctx.getSource().sendSuccess(() -> Component.literal("FastForward config reloaded"), false);
 						 return 1;
 					 }))
+					 .then(Commands.literal("preset")
+						 .then(Commands.literal("low").executes(ctx -> {
+							 // Conservative defaults
+							 CONFIG.batchSizePerServerTick = 200;
+							 CONFIG.randomTickSpeedOverride = null;
+							 CONFIG.experimentalAggressiveWarp = false;
+							 CONFIG.experimentalMaxWarpMillisPerServerTick = 150;
+							 CONFIG.hopperTransfersPerTick = 2;
+							 CONFIG.hopperAlwaysOn = false;
+							 CONFIG.furnaceTicksPerTick = 2;
+							 CONFIG.furnaceAlwaysOn = false;
+							 CONFIG.redstoneExperimentalEnabled = false;
+							 CONFIG.redstonePassesPerServerTick = 1;
+							 CONFIG.redstoneAlwaysOn = false;
+							 CONFIG.redstoneSkipEntityTicks = true;
+							 CONFIG.composterTicksPerTick = 2;
+							 CONFIG.composterAlwaysOn = false;
+							 CONFIG.dropperShotsPerPulse = 2;
+							 CONFIG.dropperAlwaysOn = false;
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("FastForward preset applied: LOW"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("high").executes(ctx -> {
+							 // Aggressive defaults
+							 CONFIG.batchSizePerServerTick = 2000;
+							 CONFIG.randomTickSpeedOverride = 100;
+							 CONFIG.experimentalAggressiveWarp = true;
+							 CONFIG.experimentalMaxWarpMillisPerServerTick = 800;
+							 CONFIG.hopperTransfersPerTick = 8;
+							 CONFIG.hopperAlwaysOn = true;
+							 CONFIG.furnaceTicksPerTick = 8;
+							 CONFIG.furnaceAlwaysOn = true;
+							 CONFIG.redstoneExperimentalEnabled = true;
+							 CONFIG.redstonePassesPerServerTick = 4;
+							 CONFIG.redstoneAlwaysOn = false;
+							 CONFIG.redstoneSkipEntityTicks = true;
+							 CONFIG.composterTicksPerTick = 8;
+							 CONFIG.composterAlwaysOn = true;
+							 CONFIG.dropperShotsPerPulse = 8;
+							 CONFIG.dropperAlwaysOn = true;
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("FastForward preset applied: HIGH"), false);
+							 return 1;
+						 }))
+					 )
 					 .then(Commands.literal("show").executes(ctx -> {
 						 String json = CONFIG.toPrettyJson();
 						 for (String line : json.split("\n")) {
@@ -272,6 +318,7 @@ public class Fastforwardengine implements ModInitializer {
 		 ServerTickEvents.END_SERVER_TICK.register(server -> {
 			 if (!CONFIG.redstoneExperimentalEnabled) return;
 			 if (!CONFIG.redstoneAlwaysOn && Engine.isRunning()) return;
+			 if (Engine.isPaused()) return;
 
 			 int passes = Math.max(1, CONFIG.redstonePassesPerServerTick) - 1;
 			 if (passes <= 0) return;
@@ -379,6 +426,10 @@ public class Fastforwardengine implements ModInitializer {
 				 synchronized (Engine.class) {
 					 originalDoMobSpawning.clear();
 					 originalRandomTick.clear();
+					 // Try to disable auto-saving to reduce IO overhead during warp
+					 try {
+						 MinecraftServer.class.getMethod("setSavingDisabled", boolean.class).invoke(server, true);
+					 } catch (Throwable ignored) {}
 					 for (ServerLevel level : server.getAllLevels()) {
 						 setClearWeather(level);
 						 GameRules.BooleanValue dm = level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING);
@@ -470,6 +521,10 @@ public class Fastforwardengine implements ModInitializer {
 				 } catch (Throwable t) {
 					 net.cyberpunk042.Fastforwardengine.LOGGER.warn("Server save failed", t);
 				 }
+				 // Re-enable auto-saving after warp
+				 try {
+					 MinecraftServer.class.getMethod("setSavingDisabled", boolean.class).invoke(server, false);
+				 } catch (Throwable ignored) {}
 				 CommandSourceStack target = replyTarget;
 				 replyTarget = null;
 				 running = false;
