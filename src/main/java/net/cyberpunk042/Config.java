@@ -20,6 +20,9 @@ public final class Config {
 	@SerializedName("randomTickSpeedOverride")
 	public Integer randomTickSpeedOverride = null; // null = no override
 
+	@SerializedName("hopperTransfersPerTick")
+	public int hopperTransfersPerTick = 1; // 1 = vanilla, >1 = accelerate hopper IO per tick during fast-forward
+
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
 	public static Config loadOrCreate() {
@@ -46,6 +49,19 @@ public final class Config {
 			}
 		}
 		return cfg;
+	}
+
+	public void save() {
+		Path configDir = FabricLoader.getInstance().getConfigDir();
+		Path configFile = configDir.resolve(FILE_NAME);
+		try {
+			Files.createDirectories(configDir);
+			try (Writer w = Files.newBufferedWriter(configFile)) {
+				GSON.toJson(this, w);
+			}
+		} catch (IOException e) {
+			Fastforwardengine.LOGGER.warn("Failed to save config", e);
+		}
 	}
 }
 

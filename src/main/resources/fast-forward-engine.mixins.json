@@ -5,7 +5,8 @@
 	"refmap": "fast-forward-engine.refmap.json",
 	"mixins": [
 		"ExampleMixin",
-		"MinecraftServerInvoker"
+		"MinecraftServerInvoker",
+		"HopperBlockEntityMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

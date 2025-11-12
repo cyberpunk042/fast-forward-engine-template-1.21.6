@@ -42,16 +42,36 @@ public class Fastforwardengine implements ModInitializer {
 					 Engine.stop(ctx.getSource().getServer(), ctx.getSource());
 					 return 1;
 				 }))
-				 .then(Commands.literal("config").then(Commands.literal("reload").executes(ctx -> {
-					 CONFIG = Config.loadOrCreate();
-					 ctx.getSource().sendSuccess(() -> Component.literal("FastForward config reloaded"), false);
-					 return 1;
-				 })));
+				 .then(Commands.literal("config")
+					 .then(Commands.literal("reload").executes(ctx -> {
+						 CONFIG = Config.loadOrCreate();
+						 ctx.getSource().sendSuccess(() -> Component.literal("FastForward config reloaded"), false);
+						 return 1;
+					 }))
+					 .then(Commands.literal("hopper")
+						 .then(Commands.argument("rate", IntegerArgumentType.integer(1, 64)).executes(ctx -> {
+							 int rate = IntegerArgumentType.getInteger(ctx, "rate");
+							 CONFIG.hopperTransfersPerTick = rate;
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("hopperTransfersPerTick set to " + rate), false);
+							 return 1;
+						 }))
+					 )
+				 );
 			 dispatcher.register(root);
 		 });
 
 		 // Drive extra server ticks on the main thread after vanilla tick completes
 		 ServerTickEvents.END_SERVER_TICK.register(Engine::onServerTick);
+	 }
+
+	 // Public facade for mixins/utilities
+	 public static boolean isFastForwardRunning() {
+		 return Engine.isRunning();
+	 }
+
+	 public static int hopperTransfersPerTick() {
+		 return Engine.getHopperTransfersPerTick();
 	 }
 
 	 static final class Engine {
@@ -67,6 +87,14 @@ public class Fastforwardengine implements ModInitializer {
 		 private static final BooleanSupplier ONE_TICK_ONLY = () -> false;
 		 @SuppressWarnings("unchecked")
 		 private static final GameRules.Key<GameRules.IntegerValue> RANDOM_TICK_KEY = resolveRandomTickKey();
+
+		 static boolean isRunning() {
+			 return running;
+		 }
+
+		 static int getHopperTransfersPerTick() {
+			 return Math.max(1, Fastforwardengine.CONFIG.hopperTransfersPerTick);
+		 }
 
 		 static void start(CommandSourceStack src, long ticks) {
 			 final MinecraftServer server = src.getServer();
