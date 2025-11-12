@@ -16,6 +16,7 @@ abstract class ComposterBlockMixin {
 
 	private boolean fastforwardengine$reenterGuard = false;
 	private static java.lang.reflect.Method fastforwardengine$tickReflect;
+	private static final java.util.Random fastforwardengine$seedRng = new java.util.Random();
 
 	@Inject(method = "tick(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/core/BlockPos;Lnet/minecraft/util/RandomSource;)V", at = @At("TAIL"))
 	private void fastforwardengine$boostComposter(BlockState state, ServerLevel level, BlockPos pos, RandomSource random, CallbackInfo ci) {
@@ -39,11 +40,33 @@ abstract class ComposterBlockMixin {
 					return;
 				}
 			}
-			for (int i = 0; i < extra; i++) {
+			if (Fastforwardengine.CONFIG.experimentalBackgroundPrecompute) {
+				// Precompute random seeds off-thread
+				long[] seeds = null;
 				try {
-					fastforwardengine$tickReflect.invoke((ComposterBlock)(Object)this, state, level, pos, random);
-				} catch (Throwable ignored) {
-					break;
+					var exec = net.cyberpunk042.Fastforwardengine.precomputeExecutor();
+					java.util.concurrent.Future<long[]> fut = exec.submit(() -> {
+						long[] arr = new long[extra];
+						for (int i = 0; i < extra; i++) arr[i] = fastforwardengine$seedRng.nextLong();
+						return arr;
+					});
+					seeds = fut.get();
+				} catch (Throwable ignored) {}
+				for (int i = 0; i < extra; i++) {
+					try {
+						RandomSource r = (seeds != null) ? RandomSource.create(seeds[i]) : random;
+						fastforwardengine$tickReflect.invoke((ComposterBlock)(Object)this, state, level, pos, r);
+					} catch (Throwable ignored) {
+						break;
+					}
+				}
+			} else {
+				for (int i = 0; i < extra; i++) {
+					try {
+						fastforwardengine$tickReflect.invoke((ComposterBlock)(Object)this, state, level, pos, random);
+					} catch (Throwable ignored) {
+						break;
+					}
 				}
 			}
 		} finally {

@@ -2,6 +2,7 @@ package net.cyberpunk042;
 
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.api.ModInitializer;
@@ -18,6 +19,9 @@ import net.cyberpunk042.mixin.MinecraftServerInvoker;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class Fastforwardengine implements ModInitializer {
 	 public static final String MOD_ID = "fast-forward-engine";
@@ -68,8 +72,18 @@ public class Fastforwardengine implements ModInitializer {
 							 CONFIG.composterAlwaysOn = false;
 							 CONFIG.dropperShotsPerPulse = 2;
 							 CONFIG.dropperAlwaysOn = false;
+							 CONFIG.suppressPlayerTicksDuringWarp = true;
+							 CONFIG.suppressNetworkDuringWarp = true;
+							 CONFIG.clientHeadlessDuringWarp = true;
+							 CONFIG.experimentalBackgroundPrecompute = false;
 							 CONFIG.save();
 							 ctx.getSource().sendSuccess(() -> Component.literal("FastForward preset applied: LOW"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("medium").executes(ctx -> {
+							 applyPresetMedium(CONFIG);
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("FastForward preset applied: MEDIUM"), false);
 							 return 1;
 						 }))
 						 .then(Commands.literal("high").executes(ctx -> {
@@ -90,8 +104,17 @@ public class Fastforwardengine implements ModInitializer {
 							 CONFIG.composterAlwaysOn = true;
 							 CONFIG.dropperShotsPerPulse = 8;
 							 CONFIG.dropperAlwaysOn = true;
+							 CONFIG.suppressPlayerTicksDuringWarp = true;
+							 CONFIG.suppressNetworkDuringWarp = true;
+							 CONFIG.clientHeadlessDuringWarp = true;
 							 CONFIG.save();
 							 ctx.getSource().sendSuccess(() -> Component.literal("FastForward preset applied: HIGH"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("ultra").executes(ctx -> {
+							 applyPresetUltra(CONFIG);
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("FastForward preset applied: ULTRA"), false);
 							 return 1;
 						 }))
 					 )
@@ -102,6 +125,31 @@ public class Fastforwardengine implements ModInitializer {
 						 }
 						 return 1;
 					 }))
+					 .then(Commands.literal("get").then(Commands.argument("key", StringArgumentType.word()).executes(ctx -> {
+						 String key = StringArgumentType.getString(ctx, "key");
+						 String value = getConfigValueAsString(key);
+						 if (value == null) {
+							 ctx.getSource().sendFailure(Component.literal("Unknown key: " + key));
+							 return 0;
+						 }
+						 ctx.getSource().sendSuccess(() -> Component.literal(key + " = " + value), false);
+						 return 1;
+					 })))
+					 .then(Commands.literal("set")
+						 .then(Commands.argument("key", StringArgumentType.word())
+							 .then(Commands.argument("value", StringArgumentType.word()).executes(ctx -> {
+								 String key = StringArgumentType.getString(ctx, "key");
+								 String raw = StringArgumentType.getString(ctx, "value");
+								 if (!setConfigValueFromString(key, raw)) {
+									 ctx.getSource().sendFailure(Component.literal("Invalid key or value for: " + key));
+									 return 0;
+								 }
+								 CONFIG.save();
+								 ctx.getSource().sendSuccess(() -> Component.literal("Set " + key + " = " + getConfigValueAsString(key)), false);
+								 return 1;
+							 }))
+						 )
+					 )
 					 .then(Commands.literal("reset").executes(ctx -> {
 						 CONFIG = new Config();
 						 CONFIG.save();
@@ -142,6 +190,15 @@ public class Fastforwardengine implements ModInitializer {
 								 CONFIG.experimentalMaxWarpMillisPerServerTick = ms;
 								 CONFIG.save();
 								 ctx.getSource().sendSuccess(() -> Component.literal("experimentalMaxWarpMillisPerServerTick set to " + ms), false);
+								 return 1;
+							 }))
+						 )
+						 .then(Commands.literal("players")
+							 .then(Commands.argument("value", BoolArgumentType.bool()).executes(ctx -> {
+								 boolean value = BoolArgumentType.getBool(ctx, "value");
+								 CONFIG.suppressPlayerTicksDuringWarp = value;
+								 CONFIG.save();
+								 ctx.getSource().sendSuccess(() -> Component.literal("suppressPlayerTicksDuringWarp set to " + value), false);
 								 return 1;
 							 }))
 						 )
@@ -289,6 +346,136 @@ public class Fastforwardengine implements ModInitializer {
 						 return 1;
 					 }))
 				 );
+			 // Quick run with preset and auto-profile
+			 dispatcher.register(Commands.literal("fastforward")
+				 .requires(src -> src.hasPermission(2) || src.getServer().isSingleplayer())
+				 .then(Commands.literal("quick")
+					 .then(Commands.literal("low")
+						 .then(Commands.argument("ticks", IntegerArgumentType.integer(1, 1_000_000_000)).executes(ctx -> {
+							 CommandSourceStack src = ctx.getSource();
+							 int ticks = IntegerArgumentType.getInteger(ctx, "ticks");
+							 MinecraftServer server = src.getServer();
+							 server.execute(() -> {
+								 if (Engine.isRunning()) {
+									 src.sendSuccess(() -> Component.literal("Fast-forward is already running."), false);
+									 return;
+								 }
+								 final Config prev = CONFIG.deepCopy();
+								 applyPresetLow(CONFIG);
+								 final long startNs = System.nanoTime();
+								 final long startGt = server.overworld().getLevelData().getGameTime();
+								 Engine.setAfterFinishHook(() -> {
+									 long wallNs = System.nanoTime() - startNs;
+									 long gtNow = server.overworld().getLevelData().getGameTime();
+									 long dt = Math.max(0L, gtNow - startGt);
+									 double sec = wallNs / 1_000_000_000.0;
+									 double tps = sec > 0 ? dt / sec : 0.0;
+									 CONFIG = prev;
+									 src.sendSuccess(() -> Component.literal(
+										 "Quick profile (LOW): " + dt + " ticks in " + (long)(sec * 1000) + " ms (" +
+											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)"
+									 ), false);
+								 });
+								 Engine.start(src, ticks);
+							 });
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("medium")
+						 .then(Commands.argument("ticks", IntegerArgumentType.integer(1, 1_000_000_000)).executes(ctx -> {
+							 CommandSourceStack src = ctx.getSource();
+							 int ticks = IntegerArgumentType.getInteger(ctx, "ticks");
+							 MinecraftServer server = src.getServer();
+							 server.execute(() -> {
+								 if (Engine.isRunning()) {
+									 src.sendSuccess(() -> Component.literal("Fast-forward is already running."), false);
+									 return;
+								 }
+								 final Config prev = CONFIG.deepCopy();
+								 applyPresetMedium(CONFIG);
+								 final long startNs = System.nanoTime();
+								 final long startGt = server.overworld().getLevelData().getGameTime();
+								 Engine.setAfterFinishHook(() -> {
+									 long wallNs = System.nanoTime() - startNs;
+									 long gtNow = server.overworld().getLevelData().getGameTime();
+									 long dt = Math.max(0L, gtNow - startGt);
+									 double sec = wallNs / 1_000_000_000.0;
+									 double tps = sec > 0 ? dt / sec : 0.0;
+									 CONFIG = prev;
+									 src.sendSuccess(() -> Component.literal(
+										 "Quick profile (MEDIUM): " + dt + " ticks in " + (long)(sec * 1000) + " ms (" +
+											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)"
+									 ), false);
+								 });
+								 Engine.start(src, ticks);
+							 });
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("high")
+						 .then(Commands.argument("ticks", IntegerArgumentType.integer(1, 1_000_000_000)).executes(ctx -> {
+							 CommandSourceStack src = ctx.getSource();
+							 int ticks = IntegerArgumentType.getInteger(ctx, "ticks");
+							 MinecraftServer server = src.getServer();
+								 server.execute(() -> {
+									 if (Engine.isRunning()) {
+										 src.sendSuccess(() -> Component.literal("Fast-forward is already running."), false);
+										 return;
+									 }
+									 final Config prev = CONFIG.deepCopy();
+									 applyPresetHigh(CONFIG);
+									 final long startNs = System.nanoTime();
+									 final long startGt = server.overworld().getLevelData().getGameTime();
+									 Engine.setAfterFinishHook(() -> {
+										 long wallNs = System.nanoTime() - startNs;
+										 long gtNow = server.overworld().getLevelData().getGameTime();
+										 long dt = Math.max(0L, gtNow - startGt);
+										 double sec = wallNs / 1_000_000_000.0;
+										 double tps = sec > 0 ? dt / sec : 0.0;
+										 CONFIG = prev;
+										 src.sendSuccess(() -> Component.literal(
+											 "Quick profile (HIGH): " + dt + " ticks in " + (long)(sec * 1000) + " ms (" +
+												 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)"
+										 ), false);
+									 });
+									 Engine.start(src, ticks);
+								 });
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("ultra")
+						 .then(Commands.argument("ticks", IntegerArgumentType.integer(1, 1_000_000_000)).executes(ctx -> {
+							 CommandSourceStack src = ctx.getSource();
+							 int ticks = IntegerArgumentType.getInteger(ctx, "ticks");
+							 MinecraftServer server = src.getServer();
+							 server.execute(() -> {
+								 if (Engine.isRunning()) {
+									 src.sendSuccess(() -> Component.literal("Fast-forward is already running."), false);
+									 return;
+								 }
+								 final Config prev = CONFIG.deepCopy();
+								 applyPresetUltra(CONFIG);
+								 final long startNs = System.nanoTime();
+								 final long startGt = server.overworld().getLevelData().getGameTime();
+								 Engine.setAfterFinishHook(() -> {
+									 long wallNs = System.nanoTime() - startNs;
+									 long gtNow = server.overworld().getLevelData().getGameTime();
+									 long dt = Math.max(0L, gtNow - startGt);
+									 double sec = wallNs / 1_000_000_000.0;
+									 double tps = sec > 0 ? dt / sec : 0.0;
+									 CONFIG = prev;
+									 src.sendSuccess(() -> Component.literal(
+										 "Quick profile (ULTRA): " + dt + " ticks in " + (long)(sec * 1000) + " ms (" +
+											 String.format(java.util.Locale.ROOT, "%.1f", tps) + " TPS)"
+									 ), false);
+								 });
+								 Engine.start(src, ticks);
+							 });
+							 return 1;
+						 }))
+					 )
+				 )
+			 );
 			 // Pause/resume time controls
 			 dispatcher.register(Commands.literal("fastpause")
 				 .requires(src -> src.hasPermission(2) || src.getServer().isSingleplayer())
@@ -309,6 +496,22 @@ public class Fastforwardengine implements ModInitializer {
 				 }))
 			 );
 			 dispatcher.register(root);
+
+			 // Help
+			 dispatcher.register(Commands.literal("fastforward")
+				 .then(Commands.literal("help").executes(ctx -> {
+					 String[] lines = new String[]{
+						 "Usage: /fastforward <ticks> | stop | profile <start|stop>",
+						 "Config: /fastforward config show|get <key>|set <key> <value>|preset <low|high>|reload|reset",
+						 "Groups: warp|hopper|furnace|redstone|composter|dropper",
+						 "Quick: /fastforward quick <low|high> <ticks>"
+					 };
+					 for (String l : lines) {
+						 ctx.getSource().sendSuccess(() -> Component.literal(l), false);
+					 }
+					 return 1;
+				 }))
+			 );
 		 });
 
 		 // Drive extra server ticks on the main thread after vanilla tick completes
@@ -374,8 +577,159 @@ public class Fastforwardengine implements ModInitializer {
 		 return Engine.isRedstonePassActive();
 	 }
 
+	 public static java.util.concurrent.ExecutorService precomputeExecutor() {
+		 return Engine.ensurePrecomputeExec();
+	 }
+
+	 // Generic config get/set helpers
+	 private static String getConfigValueAsString(String key) {
+		 return switch (key) {
+			 case "batchSizePerServerTick" -> String.valueOf(CONFIG.batchSizePerServerTick);
+			 case "randomTickSpeedOverride" -> String.valueOf(CONFIG.randomTickSpeedOverride);
+			 case "experimentalAggressiveWarp" -> String.valueOf(CONFIG.experimentalAggressiveWarp);
+			 case "experimentalMaxWarpMillisPerServerTick" -> String.valueOf(CONFIG.experimentalMaxWarpMillisPerServerTick);
+			 case "experimentalBackgroundPrecompute" -> String.valueOf(CONFIG.experimentalBackgroundPrecompute);
+			 case "hopperTransfersPerTick" -> String.valueOf(CONFIG.hopperTransfersPerTick);
+			 case "hopperAlwaysOn" -> String.valueOf(CONFIG.hopperAlwaysOn);
+			 case "furnaceTicksPerTick" -> String.valueOf(CONFIG.furnaceTicksPerTick);
+			 case "furnaceAlwaysOn" -> String.valueOf(CONFIG.furnaceAlwaysOn);
+			 case "redstoneExperimentalEnabled" -> String.valueOf(CONFIG.redstoneExperimentalEnabled);
+			 case "redstonePassesPerServerTick" -> String.valueOf(CONFIG.redstonePassesPerServerTick);
+			 case "redstoneAlwaysOn" -> String.valueOf(CONFIG.redstoneAlwaysOn);
+			 case "redstoneSkipEntityTicks" -> String.valueOf(CONFIG.redstoneSkipEntityTicks);
+			 case "composterTicksPerTick" -> String.valueOf(CONFIG.composterTicksPerTick);
+			 case "composterAlwaysOn" -> String.valueOf(CONFIG.composterAlwaysOn);
+			 case "dropperShotsPerPulse" -> String.valueOf(CONFIG.dropperShotsPerPulse);
+			 case "dropperAlwaysOn" -> String.valueOf(CONFIG.dropperAlwaysOn);
+			 case "suppressPlayerTicksDuringWarp" -> String.valueOf(CONFIG.suppressPlayerTicksDuringWarp);
+			 default -> null;
+		 };
+	 }
+
+	 private static boolean setConfigValueFromString(String key, String raw) {
+		 try {
+			 switch (key) {
+				 case "batchSizePerServerTick" -> CONFIG.batchSizePerServerTick = Integer.parseInt(raw);
+				 case "randomTickSpeedOverride" -> {
+					 if ("null".equalsIgnoreCase(raw) || "-1".equals(raw)) CONFIG.randomTickSpeedOverride = null;
+					 else CONFIG.randomTickSpeedOverride = Integer.parseInt(raw);
+				 }
+				 case "experimentalAggressiveWarp" -> CONFIG.experimentalAggressiveWarp = Boolean.parseBoolean(raw);
+				 case "experimentalMaxWarpMillisPerServerTick" -> CONFIG.experimentalMaxWarpMillisPerServerTick = Integer.parseInt(raw);
+				 case "experimentalBackgroundPrecompute" -> CONFIG.experimentalBackgroundPrecompute = Boolean.parseBoolean(raw);
+				 case "hopperTransfersPerTick" -> CONFIG.hopperTransfersPerTick = Integer.parseInt(raw);
+				 case "hopperAlwaysOn" -> CONFIG.hopperAlwaysOn = Boolean.parseBoolean(raw);
+				 case "furnaceTicksPerTick" -> CONFIG.furnaceTicksPerTick = Integer.parseInt(raw);
+				 case "furnaceAlwaysOn" -> CONFIG.furnaceAlwaysOn = Boolean.parseBoolean(raw);
+				 case "redstoneExperimentalEnabled" -> CONFIG.redstoneExperimentalEnabled = Boolean.parseBoolean(raw);
+				 case "redstonePassesPerServerTick" -> CONFIG.redstonePassesPerServerTick = Integer.parseInt(raw);
+				 case "redstoneAlwaysOn" -> CONFIG.redstoneAlwaysOn = Boolean.parseBoolean(raw);
+				 case "redstoneSkipEntityTicks" -> CONFIG.redstoneSkipEntityTicks = Boolean.parseBoolean(raw);
+				 case "composterTicksPerTick" -> CONFIG.composterTicksPerTick = Integer.parseInt(raw);
+				 case "composterAlwaysOn" -> CONFIG.composterAlwaysOn = Boolean.parseBoolean(raw);
+				 case "dropperShotsPerPulse" -> CONFIG.dropperShotsPerPulse = Integer.parseInt(raw);
+				 case "dropperAlwaysOn" -> CONFIG.dropperAlwaysOn = Boolean.parseBoolean(raw);
+				 case "suppressPlayerTicksDuringWarp" -> CONFIG.suppressPlayerTicksDuringWarp = Boolean.parseBoolean(raw);
+				 default -> { return false; }
+			 }
+			 return true;
+		 } catch (Throwable t) {
+			 return false;
+		 }
+	 }
+
+	 private static void applyPresetLow(Config c) {
+		 c.batchSizePerServerTick = 200;
+		 c.randomTickSpeedOverride = null;
+		 c.experimentalAggressiveWarp = false;
+		 c.experimentalMaxWarpMillisPerServerTick = 150;
+		 c.hopperTransfersPerTick = 2;
+		 c.hopperAlwaysOn = false;
+		 c.furnaceTicksPerTick = 2;
+		 c.furnaceAlwaysOn = false;
+		 c.redstoneExperimentalEnabled = false;
+		 c.redstonePassesPerServerTick = 1;
+		 c.redstoneAlwaysOn = false;
+		 c.redstoneSkipEntityTicks = true;
+		 c.composterTicksPerTick = 2;
+		 c.composterAlwaysOn = false;
+		 c.dropperShotsPerPulse = 2;
+		 c.dropperAlwaysOn = false;
+		 c.suppressPlayerTicksDuringWarp = true;
+	 }
+
+	 private static void applyPresetHigh(Config c) {
+		 c.batchSizePerServerTick = 2000;
+		 c.randomTickSpeedOverride = 0; // eliminate random ticks for throughput
+		 c.experimentalAggressiveWarp = true;
+		 c.experimentalMaxWarpMillisPerServerTick = 800;
+		 c.hopperTransfersPerTick = 6;
+		 c.hopperAlwaysOn = false;
+		 c.furnaceTicksPerTick = 6;
+		 c.furnaceAlwaysOn = false;
+		 c.redstoneExperimentalEnabled = true;
+		 c.redstonePassesPerServerTick = 2;
+		 c.redstoneAlwaysOn = false;
+		 c.redstoneSkipEntityTicks = true;
+		 c.composterTicksPerTick = 4;
+		 c.composterAlwaysOn = false;
+		 c.dropperShotsPerPulse = 4;
+		 c.dropperAlwaysOn = false;
+		 c.suppressPlayerTicksDuringWarp = true;
+		 c.experimentalBackgroundPrecompute = true;
+		 c.suppressNetworkDuringWarp = true;
+		 c.clientHeadlessDuringWarp = true;
+	 }
+
+	 private static void applyPresetMedium(Config c) {
+		 c.batchSizePerServerTick = 1000;
+		 c.randomTickSpeedOverride = 0;
+		 c.experimentalAggressiveWarp = true;
+		 c.experimentalMaxWarpMillisPerServerTick = 400;
+		 c.hopperTransfersPerTick = 4;
+		 c.hopperAlwaysOn = false;
+		 c.furnaceTicksPerTick = 4;
+		 c.furnaceAlwaysOn = false;
+		 c.redstoneExperimentalEnabled = true;
+		 c.redstonePassesPerServerTick = 1;
+		 c.redstoneAlwaysOn = false;
+		 c.redstoneSkipEntityTicks = true;
+		 c.composterTicksPerTick = 3;
+		 c.composterAlwaysOn = false;
+		 c.dropperShotsPerPulse = 3;
+		 c.dropperAlwaysOn = false;
+		 c.suppressPlayerTicksDuringWarp = true;
+		 c.experimentalBackgroundPrecompute = true;
+		 c.suppressNetworkDuringWarp = true;
+		 c.clientHeadlessDuringWarp = true;
+	 }
+
+	 private static void applyPresetUltra(Config c) {
+		 c.batchSizePerServerTick = 5000;
+		 c.randomTickSpeedOverride = 0;
+		 c.experimentalAggressiveWarp = true;
+		 c.experimentalMaxWarpMillisPerServerTick = 1200;
+		 c.hopperTransfersPerTick = 12;
+		 c.hopperAlwaysOn = false;
+		 c.furnaceTicksPerTick = 12;
+		 c.furnaceAlwaysOn = false;
+		 c.redstoneExperimentalEnabled = true;
+		 c.redstonePassesPerServerTick = 4;
+		 c.redstoneAlwaysOn = false;
+		 c.redstoneSkipEntityTicks = true;
+		 c.composterTicksPerTick = 8;
+		 c.composterAlwaysOn = false;
+		 c.dropperShotsPerPulse = 8;
+		 c.dropperAlwaysOn = false;
+		 // Keep player ticks ON to allow container GUI syncing during ultra
+		 c.suppressPlayerTicksDuringWarp = false;
+		 c.experimentalBackgroundPrecompute = true;
+		 c.suppressNetworkDuringWarp = true;
+		 c.clientHeadlessDuringWarp = true;
+	 }
+
 	 static final class Engine {
-		 private static volatile boolean running = false;
+	private static volatile boolean running = false;
 		 private static volatile boolean warping = false;
 		 private static volatile boolean paused = false;
 		 private static volatile boolean redstonePassActive = false;
@@ -396,8 +750,8 @@ public class Fastforwardengine implements ModInitializer {
 		 static volatile long profileStartGameTime = 0L;
 
 		 static boolean isRunning() {
-			 return running;
-		 }
+		return running;
+	}
 
 		 static boolean isPaused() {
 			 return paused;
@@ -409,6 +763,25 @@ public class Fastforwardengine implements ModInitializer {
 
 		 static boolean isRedstonePassActive() {
 			 return redstonePassActive;
+		 }
+
+		 static void setAfterFinishHook(Runnable r) {
+			 afterFinishHook = r;
+		 }
+
+		 private static volatile Runnable afterFinishHook = null;
+
+		 private static volatile ExecutorService precomputeExec = null;
+
+		 static ExecutorService ensurePrecomputeExec() {
+			 if (precomputeExec == null) {
+				 precomputeExec = Executors.newSingleThreadExecutor(r -> {
+					 Thread t = new Thread(r, "ff-engine-precompute");
+					 t.setDaemon(true);
+					 return t;
+				 });
+			 }
+			 return precomputeExec;
 		 }
 
 		 static int getHopperTransfersPerTick() {
@@ -426,10 +799,37 @@ public class Fastforwardengine implements ModInitializer {
 				 synchronized (Engine.class) {
 					 originalDoMobSpawning.clear();
 					 originalRandomTick.clear();
+					 // Adjust network load if configured
+					 Integer savedView = null;
+					 Integer savedSim = null;
+					 if (CONFIG.suppressNetworkDuringWarp) {
+						 try {
+							 var pl = server.getPlayerList();
+							 try { savedView = (Integer) pl.getClass().getMethod("getViewDistance").invoke(pl); } catch (Throwable ignored) {}
+							 try { pl.getClass().getMethod("setViewDistance", int.class).invoke(pl, 2); } catch (Throwable ignored) {}
+						 } catch (Throwable ignored) {}
+					 }
+					 // stash in replyTarget holder to restore later via hook
+					 if (savedView != null) {
+						 final Integer fv = savedView;
+						 Runnable restore = () -> {
+							 try {
+								 var pl = server.getPlayerList();
+								 if (fv != null) { try { pl.getClass().getMethod("setViewDistance", int.class).invoke(pl, fv); } catch (Throwable ignored) {} }
+							 } catch (Throwable ignored) {}
+						 };
+						 // chain any existing afterFinishHook
+						 if (afterFinishHook != null) {
+							 Runnable prev = afterFinishHook;
+							 afterFinishHook = () -> { try { prev.run(); } finally { restore.run(); } };
+						 } else {
+							 afterFinishHook = restore;
+						 }
+					 }
 					 // Try to disable auto-saving to reduce IO overhead during warp
 					 try {
 						 MinecraftServer.class.getMethod("setSavingDisabled", boolean.class).invoke(server, true);
-					 } catch (Throwable ignored) {}
+				} catch (Throwable ignored) {}
 					 for (ServerLevel level : server.getAllLevels()) {
 						 setClearWeather(level);
 						 GameRules.BooleanValue dm = level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING);
@@ -528,6 +928,13 @@ public class Fastforwardengine implements ModInitializer {
 				 CommandSourceStack target = replyTarget;
 				 replyTarget = null;
 				 running = false;
+				 try {
+					 if (afterFinishHook != null) {
+						 afterFinishHook.run();
+					 }
+				 } finally {
+					 afterFinishHook = null;
+				 }
 				 if (target != null) {
 					 long sim = totalTicks;
 					 target.sendSuccess(() -> Component.literal("Simulated " + sim + " ticks in " + elapsed + " ms"), false);

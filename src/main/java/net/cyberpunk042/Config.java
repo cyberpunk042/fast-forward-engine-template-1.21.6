@@ -50,6 +50,18 @@ public final class Config {
 	@SerializedName("redstoneSkipEntityTicks")
 	public boolean redstoneSkipEntityTicks = true; // during experimental redstone passes, skip entity ticks
 
+	@SerializedName("suppressPlayerTicksDuringWarp")
+	public boolean suppressPlayerTicksDuringWarp = false; // when true, players are not ticked during fast-forward for max throughput
+
+	@SerializedName("experimentalBackgroundPrecompute")
+	public boolean experimentalBackgroundPrecompute = false; // try to precompute RNG-heavy steps off-thread (then apply on main thread)
+
+	@SerializedName("suppressNetworkDuringWarp")
+	public boolean suppressNetworkDuringWarp = true; // lower view/simulation distance to reduce network load
+
+	@SerializedName("clientHeadlessDuringWarp")
+	public boolean clientHeadlessDuringWarp = true; // in integrated SP, reduce client render load during warp
+
 	@SerializedName("composterTicksPerTick")
 	public int composterTicksPerTick = 1; // extra composter tick passes when enabled
 
@@ -105,6 +117,10 @@ public final class Config {
 
 	public String toPrettyJson() {
 		return GSON.toJson(this);
+	}
+
+	public Config deepCopy() {
+		return GSON.fromJson(GSON.toJson(this), Config.class);
 	}
 }
 

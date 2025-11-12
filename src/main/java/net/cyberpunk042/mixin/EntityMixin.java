@@ -25,8 +25,9 @@ abstract class EntityMixin {
 		// Fast-forward run: keep only essential entities ticking for farm fidelity
 		if (Fastforwardengine.isFastForwardRunning()) {
 			Object self = this;
+			boolean playersTick = !Fastforwardengine.CONFIG.suppressPlayerTicksDuringWarp;
 			boolean essential =
-				(self instanceof Player) ||
+				(playersTick && (self instanceof Player)) ||
 				(self instanceof ItemEntity) ||
 				(self instanceof ExperienceOrb) ||
 				(self instanceof MinecartHopper);
@@ -37,7 +38,11 @@ abstract class EntityMixin {
 		}
 		// Redstone experimental: optionally skip entity ticks during extra passes
 		if (Fastforwardengine.isRedstonePassActive() && Fastforwardengine.CONFIG.redstoneSkipEntityTicks) {
-			ci.cancel();
+			// Always allow players and item entities to tick during redstone passes
+			Object self = this;
+			if (!((self instanceof Player) || (self instanceof net.minecraft.world.entity.item.ItemEntity))) {
+				ci.cancel();
+			}
 		}
 	}
 }
