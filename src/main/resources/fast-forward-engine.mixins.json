@@ -11,7 +11,12 @@
 		"ComposterBlockMixin",
 		"DispenserBlockMixin",
 		"EntityMixin",
-		"ServerLevelMixin"
+		"ServerLevelMixin",
+		"ServerLevelInvoker",
+		"ServerScoreboardMixin",
+		"PlayerAdvancementsMixin",
+		"ServerStatsCounterMixin",
+		"RecipeManagerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

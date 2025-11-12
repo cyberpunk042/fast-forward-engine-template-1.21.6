@@ -12,6 +12,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.lang.reflect.Method;
+
 @Mixin(HopperBlockEntity.class)
 abstract class HopperBlockEntityMixin {
 
@@ -19,8 +21,11 @@ abstract class HopperBlockEntityMixin {
 	private static void pushItemsTick(Level level, BlockPos pos, BlockState state, HopperBlockEntity hopper) {}
 
 	private static boolean fastforwardengine$reenterGuard = false;
-	private static java.lang.reflect.Method fastforwardengine$suck2 = null;
-	private static java.lang.reflect.Method fastforwardengine$suck4 = null;
+	private static Method fastforwardengine$pull2 = null;
+	private static Method fastforwardengine$pull4 = null;
+	private static Method fastforwardengine$push4 = null;
+
+	// Note: removed redirect-based neighbor container cache due to mapping variance across versions.
 
 	@Inject(method = "pushItemsTick", at = @At("TAIL"))
 	private static void fastforwardengine$boostTransfers(Level level, BlockPos pos, BlockState state, HopperBlockEntity hopper, CallbackInfo ci) {
@@ -32,37 +37,50 @@ abstract class HopperBlockEntityMixin {
 		if (extra <= 0) return;
 		fastforwardengine$reenterGuard = true;
 		try {
-			// Resolve suck methods lazily
-			if (fastforwardengine$suck2 == null && fastforwardengine$suck4 == null) {
+			// Resolve push/pull helpers lazily
+			if (fastforwardengine$pull2 == null && fastforwardengine$pull4 == null && fastforwardengine$push4 == null) {
 				try {
-					for (var m : HopperBlockEntity.class.getDeclaredMethods()) {
+					for (Method m : HopperBlockEntity.class.getDeclaredMethods()) {
 						String n = m.getName().toLowerCase();
 						int pc = m.getParameterCount();
-						if (!(n.contains("suck") || n.contains("move"))) continue;
-						if (pc == 2) {
-							var p = m.getParameterTypes();
-							if (HopperBlockEntity.class.isAssignableFrom(p[1])) {
+						var p = m.getParameterTypes();
+						if (pc == 2 && (n.contains("suck") || n.contains("pull"))) {
+							if (p.length == 2 && Level.class.isAssignableFrom(p[0]) && HopperBlockEntity.class.isAssignableFrom(p[1])) {
 								m.setAccessible(true);
-								fastforwardengine$suck2 = m;
+								fastforwardengine$pull2 = m;
+								continue;
 							}
-						} else if (pc == 4) {
+						}
+						if (pc == 4 && Level.class.isAssignableFrom(p[0]) && BlockPos.class.isAssignableFrom(p[1]) && BlockState.class.isAssignableFrom(p[2]) && HopperBlockEntity.class.isAssignableFrom(p[3])) {
 							m.setAccessible(true);
-							fastforwardengine$suck4 = m;
+							if (n.contains("suck") || n.contains("pull")) {
+								fastforwardengine$pull4 = m;
+							} else if (n.contains("move") || n.contains("eject") || n.contains("push") || n.contains("transfer")) {
+								fastforwardengine$push4 = m;
+							}
 						}
 					}
 				} catch (Throwable ignored) {}
 			}
-			// Perform pull-only extras to preserve vertical-down routing; pushing will occur on vanilla path next tick
+			// Perform extra push then pull cycles to accelerate throughput to crafters
 			for (int i = 0; i < extra; i++) {
 				try {
-					if (fastforwardengine$suck2 != null) {
+					// Push out
+					if (fastforwardengine$push4 != null) {
+						try { fastforwardengine$push4.invoke(null, level, pos, state, hopper); } catch (Throwable ignored) {}
+					} else {
+						// Fallback: invoke vanilla push routine again
+						try { pushItemsTick(level, pos, state, hopper); } catch (Throwable ignored) {}
+					}
+					// Pull in
+					if (fastforwardengine$pull2 != null) {
 						if (level instanceof ServerLevel sl) {
-							try { fastforwardengine$suck2.invoke(null, sl, hopper); } catch (Throwable ignored) {}
+							try { fastforwardengine$pull2.invoke(null, sl, hopper); } catch (Throwable ignored) {}
 						} else {
-							try { fastforwardengine$suck2.invoke(null, level, hopper); } catch (Throwable ignored) {}
+							try { fastforwardengine$pull2.invoke(null, level, hopper); } catch (Throwable ignored) {}
 						}
-					} else if (fastforwardengine$suck4 != null) {
-						try { fastforwardengine$suck4.invoke(null, level, pos, state, hopper); } catch (Throwable ignored) {}
+					} else if (fastforwardengine$pull4 != null) {
+						try { fastforwardengine$pull4.invoke(null, level, pos, state, hopper); } catch (Throwable ignored) {}
 					}
 				} catch (Throwable ignored) {}
 			}

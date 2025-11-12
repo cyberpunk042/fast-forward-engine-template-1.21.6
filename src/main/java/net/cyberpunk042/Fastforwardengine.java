@@ -15,6 +15,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.GameRules;
 import net.cyberpunk042.mixin.MinecraftServerInvoker;
+import net.cyberpunk042.mixin.ServerLevelInvoker;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -201,6 +202,30 @@ public class Fastforwardengine implements ModInitializer {
 								 ctx.getSource().sendSuccess(() -> Component.literal("suppressPlayerTicksDuringWarp set to " + value), false);
 								 return 1;
 							 }))
+						 )
+						 .then(Commands.literal("scope")
+							 .then(Commands.literal("all").executes(ctx -> {
+								 CONFIG.warpScope = "all";
+								 CONFIG.save();
+								 ctx.getSource().sendSuccess(() -> Component.literal("warpScope set to all"), false);
+								 return 1;
+							 }))
+							 .then(Commands.literal("active").executes(ctx -> {
+								 CONFIG.warpScope = "active";
+								 CONFIG.save();
+								 ctx.getSource().sendSuccess(() -> Component.literal("warpScope set to active (current dimension only)"), false);
+								 return 1;
+							 }))
+							 .then(Commands.literal("dimension")
+								 .then(Commands.argument("id", StringArgumentType.word()).executes(ctx -> {
+									 String id = StringArgumentType.getString(ctx, "id");
+									 CONFIG.warpScope = "dimension";
+									 CONFIG.warpScopeDimension = id;
+									 CONFIG.save();
+									 ctx.getSource().sendSuccess(() -> Component.literal("warpScope set to dimension " + id), false);
+									 return 1;
+								 }))
+							 )
 						 )
 					 )
 					 .then(Commands.literal("furnace")
@@ -733,10 +758,14 @@ public class Fastforwardengine implements ModInitializer {
 		 private static volatile boolean warping = false;
 		 private static volatile boolean paused = false;
 		 private static volatile boolean redstonePassActive = false;
+		 // Adaptive parameters (reset on start)
+		 private static volatile long adaptiveBatch = -1L;
+		 private static volatile long adaptiveBudgetNs = -1L;
 		 private static long remainingTicks = 0L;
 		 private static long totalTicks = 0L;
 		 private static long startedAtMs = 0L;
 		 private static CommandSourceStack replyTarget = null;
+		 private static String startDimensionKey = null;
 		 private static final Map<ServerLevel, Boolean> originalDoMobSpawning = new HashMap<>();
 		 private static final Map<ServerLevel, Integer> originalRandomTick = new HashMap<>();
 		 // Supplier semantics: returning false makes tickServer perform a single cycle and exit
@@ -799,6 +828,9 @@ public class Fastforwardengine implements ModInitializer {
 				 synchronized (Engine.class) {
 					 originalDoMobSpawning.clear();
 					 originalRandomTick.clear();
+					 // Reset adaptive state
+					 adaptiveBatch = Math.max(1L, Fastforwardengine.CONFIG.batchSizePerServerTick);
+					 adaptiveBudgetNs = Math.max(10L, Fastforwardengine.CONFIG.experimentalMaxWarpMillisPerServerTick) * 1_000_000L;
 					 // Adjust network load if configured
 					 Integer savedView = null;
 					 Integer savedSim = null;
@@ -847,6 +879,7 @@ public class Fastforwardengine implements ModInitializer {
 					 totalTicks = ticks;
 					 startedAtMs = System.currentTimeMillis();
 					 replyTarget = src;
+					 try { startDimensionKey = src.getLevel().dimension().location().toString(); } catch (Throwable ignored) { startDimensionKey = null; }
 					 running = true;
 				 }
 			 });
@@ -868,20 +901,57 @@ public class Fastforwardengine implements ModInitializer {
 			 if (!running || warping || paused) return;
 			 warping = true;
 			 try {
-				 long batch = Math.min(remainingTicks, Math.max(1L, CONFIG.batchSizePerServerTick));
+				 // Determine effective batch/budget (adaptive if enabled via aggressive mode)
 				 final boolean aggressive = CONFIG.experimentalAggressiveWarp;
-				 final long budgetNs = Math.max(1L, CONFIG.experimentalMaxWarpMillisPerServerTick) * 1_000_000L;
-				 final long endNs = aggressive ? (System.nanoTime() + budgetNs) : Long.MIN_VALUE;
+				 long targetBatch = Math.max(1L, adaptiveBatch > 0 ? adaptiveBatch : CONFIG.batchSizePerServerTick);
+				 long batch = Math.min(remainingTicks, targetBatch);
+				 final long budgetNsEff = Math.max(1L, adaptiveBudgetNs > 0 ? adaptiveBudgetNs
+					 : (long) CONFIG.experimentalMaxWarpMillisPerServerTick * 1_000_000L);
+				 final long endNs = aggressive ? (System.nanoTime() + budgetNsEff) : Long.MIN_VALUE;
+				 final long loopStartNs = System.nanoTime();
 				 MinecraftServerInvoker inv = (MinecraftServerInvoker) (Object) server;
 				 long i = 0;
 				 while (remainingTicks > 0 && i < batch) {
 					 try {
-						 try {
-							 // Prefer ticking worlds directly; this drives block entities (hoppers), redstone, fluids
-							 inv.fastforwardengine$invokeTickChildren(ONE_TICK_ONLY);
-						 } catch (Throwable ignored) {
-							 // Fallback to full server tick if direct world ticking is unavailable
-							 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
+						 // Dimension scoping: tick only selected worlds if configured
+						 if (!"all".equalsIgnoreCase(CONFIG.warpScope)) {
+							 java.util.List<ServerLevel> levels = new java.util.ArrayList<>();
+							 if ("active".equalsIgnoreCase(CONFIG.warpScope) && startDimensionKey != null) {
+								 for (ServerLevel lvl : server.getAllLevels()) {
+									 if (lvl.dimension().location().toString().equals(startDimensionKey)) {
+										 levels.add(lvl);
+									 }
+								 }
+							 } else if ("dimension".equalsIgnoreCase(CONFIG.warpScope)) {
+								 for (ServerLevel lvl : server.getAllLevels()) {
+									 if (lvl.dimension().location().toString().equals(CONFIG.warpScopeDimension)) {
+										 levels.add(lvl);
+									 }
+								 }
+							 }
+							 if (!levels.isEmpty()) {
+								 for (ServerLevel lvl : levels) {
+									 try {
+										 ((ServerLevelInvoker)(Object)lvl).fastforwardengine$invokeTick(ONE_TICK_ONLY);
+									 } catch (Throwable t) {
+										 net.cyberpunk042.Fastforwardengine.LOGGER.warn("Scoped world tick failed", t);
+									 }
+								 }
+							 } else {
+								 // fallback to server-wide tick if no match
+								 try {
+									 inv.fastforwardengine$invokeTickChildren(ONE_TICK_ONLY);
+								 } catch (Throwable ignored) {
+									 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
+								 }
+							 }
+						 } else {
+							 try {
+								 // Default: tick all worlds
+								 inv.fastforwardengine$invokeTickChildren(ONE_TICK_ONLY);
+							 } catch (Throwable ignored) {
+								 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
+							 }
 						 }
 						 remainingTicks--;
 						 i++;
@@ -891,6 +961,28 @@ public class Fastforwardengine implements ModInitializer {
 					 } catch (Throwable t) {
 						 net.cyberpunk042.Fastforwardengine.LOGGER.error("Fast-forward tick failed", t);
 						 break;
+					 }
+				 }
+				 // Adaptive tuning: steer toward ~80% budget utilization
+				 if (aggressive) {
+					 long usedNs = Math.max(1L, System.nanoTime() - loopStartNs);
+					 double util = Math.min(2.0, usedNs / (double) budgetNsEff);
+					 // Batch tuning
+					 long maxCap = Math.max(1L, CONFIG.batchSizePerServerTick) * 4L;
+					 if (util < 0.6 && i >= batch) {
+						 // We finished batch before hitting budget → increase batch
+						 adaptiveBatch = Math.min(maxCap, Math.max(1L, (long) Math.ceil(targetBatch * 1.25)));
+					 } else if (util > 0.95) {
+						 // We saturated/overran budget → reduce batch modestly
+						 adaptiveBatch = Math.max(1L, (long) Math.floor(targetBatch * 0.85));
+					 }
+					 // Budget tuning
+					 long minBudget = 50_000_000L;   // 50 ms
+					 long maxBudget = Math.max(budgetNsEff, 2_000_000_000L); // up to 2000 ms
+					 if (util < 0.5 && i >= batch) {
+						 adaptiveBudgetNs = Math.min(maxBudget, Math.max(minBudget, (long) (budgetNsEff * 1.2)));
+					 } else if (util > 1.05) {
+						 adaptiveBudgetNs = Math.max(minBudget, (long) (budgetNsEff * 0.85));
 					 }
 				 }
 			 } finally {

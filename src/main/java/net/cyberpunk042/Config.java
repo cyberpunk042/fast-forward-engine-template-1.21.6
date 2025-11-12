@@ -62,6 +62,12 @@ public final class Config {
 	@SerializedName("clientHeadlessDuringWarp")
 	public boolean clientHeadlessDuringWarp = true; // in integrated SP, reduce client render load during warp
 
+	@SerializedName("warpScope")
+	public String warpScope = "all"; // all | active | dimension
+
+	@SerializedName("warpScopeDimension")
+	public String warpScopeDimension = "minecraft:overworld"; // used when warpScope == dimension
+
 	@SerializedName("composterTicksPerTick")
 	public int composterTicksPerTick = 1; // extra composter tick passes when enabled
 
