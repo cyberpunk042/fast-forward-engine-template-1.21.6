@@ -50,7 +50,7 @@ public class Fastforwardengine implements ModInitializer {
 			 dispatcher.register(root);
 		 });
 
-		 // Drive extra server ticks on the main thread
+		 // Drive extra server ticks on the main thread after vanilla tick completes
 		 ServerTickEvents.END_SERVER_TICK.register(Engine::onServerTick);
 	 }
 
@@ -63,7 +63,8 @@ public class Fastforwardengine implements ModInitializer {
 		 private static CommandSourceStack replyTarget = null;
 		 private static final Map<ServerLevel, Boolean> originalDoMobSpawning = new HashMap<>();
 		 private static final Map<ServerLevel, Integer> originalRandomTick = new HashMap<>();
-		 private static final BooleanSupplier ALWAYS_TRUE = () -> true;
+		 // Supplier semantics: returning false makes tickServer perform a single cycle and exit
+		 private static final BooleanSupplier ONE_TICK_ONLY = () -> false;
 		 @SuppressWarnings("unchecked")
 		 private static final GameRules.Key<GameRules.IntegerValue> RANDOM_TICK_KEY = resolveRandomTickKey();
 
@@ -121,9 +122,11 @@ public class Fastforwardengine implements ModInitializer {
 				 for (long i = 0; i < batch && remainingTicks > 0; i++) {
 					 try {
 						 try {
-							 inv.fastforwardengine$invokeTickServer(ALWAYS_TRUE);
+							 // Prefer ticking worlds directly; this drives block entities (hoppers), redstone, fluids
+							 inv.fastforwardengine$invokeTickChildren(ONE_TICK_ONLY);
 						 } catch (Throwable ignored) {
-							 inv.fastforwardengine$invokeTickChildren(ALWAYS_TRUE);
+							 // Fallback to full server tick if direct world ticking is unavailable
+							 inv.fastforwardengine$invokeTickServer(ONE_TICK_ONLY);
 						 }
 						 remainingTicks--;
 					 } catch (Throwable t) {
