@@ -10,6 +10,9 @@ import java.util.function.BooleanSupplier;
 public interface MinecraftServerInvoker {
 	@Invoker("tickChildren")
 	void fastforwardengine$invokeTickChildren(BooleanSupplier hasTime);
+
+	@Invoker("tickServer")
+	void fastforwardengine$invokeTickServer(BooleanSupplier hasTime);
 }
 
 
