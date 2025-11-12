@@ -614,6 +614,7 @@ public class Fastforwardengine implements ModInitializer {
 			 case "experimentalAggressiveWarp" -> String.valueOf(CONFIG.experimentalAggressiveWarp);
 			 case "experimentalMaxWarpMillisPerServerTick" -> String.valueOf(CONFIG.experimentalMaxWarpMillisPerServerTick);
 			 case "experimentalBackgroundPrecompute" -> String.valueOf(CONFIG.experimentalBackgroundPrecompute);
+			 case "clientHeadlessDuringWarp" -> String.valueOf(CONFIG.clientHeadlessDuringWarp);
 			 case "hopperTransfersPerTick" -> String.valueOf(CONFIG.hopperTransfersPerTick);
 			 case "hopperAlwaysOn" -> String.valueOf(CONFIG.hopperAlwaysOn);
 			 case "furnaceTicksPerTick" -> String.valueOf(CONFIG.furnaceTicksPerTick);
@@ -627,6 +628,7 @@ public class Fastforwardengine implements ModInitializer {
 			 case "dropperShotsPerPulse" -> String.valueOf(CONFIG.dropperShotsPerPulse);
 			 case "dropperAlwaysOn" -> String.valueOf(CONFIG.dropperAlwaysOn);
 			 case "suppressPlayerTicksDuringWarp" -> String.valueOf(CONFIG.suppressPlayerTicksDuringWarp);
+			 case "experimentalClientHeadless" -> String.valueOf(CONFIG.experimentalClientHeadless);
 			 default -> null;
 		 };
 	 }
@@ -650,11 +652,13 @@ public class Fastforwardengine implements ModInitializer {
 				 case "redstonePassesPerServerTick" -> CONFIG.redstonePassesPerServerTick = Integer.parseInt(raw);
 				 case "redstoneAlwaysOn" -> CONFIG.redstoneAlwaysOn = Boolean.parseBoolean(raw);
 				 case "redstoneSkipEntityTicks" -> CONFIG.redstoneSkipEntityTicks = Boolean.parseBoolean(raw);
+				 case "clientHeadlessDuringWarp" -> CONFIG.clientHeadlessDuringWarp = Boolean.parseBoolean(raw);
 				 case "composterTicksPerTick" -> CONFIG.composterTicksPerTick = Integer.parseInt(raw);
 				 case "composterAlwaysOn" -> CONFIG.composterAlwaysOn = Boolean.parseBoolean(raw);
 				 case "dropperShotsPerPulse" -> CONFIG.dropperShotsPerPulse = Integer.parseInt(raw);
 				 case "dropperAlwaysOn" -> CONFIG.dropperAlwaysOn = Boolean.parseBoolean(raw);
 				 case "suppressPlayerTicksDuringWarp" -> CONFIG.suppressPlayerTicksDuringWarp = Boolean.parseBoolean(raw);
+				 case "experimentalClientHeadless" -> CONFIG.experimentalClientHeadless = Boolean.parseBoolean(raw);
 				 default -> { return false; }
 			 }
 			 return true;

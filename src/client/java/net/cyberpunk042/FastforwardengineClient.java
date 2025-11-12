@@ -2,6 +2,7 @@ package net.cyberpunk042;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.network.chat.Component;
 
 public class FastforwardengineClient implements ClientModInitializer {
 	private static boolean applied = false;
@@ -13,7 +14,10 @@ public class FastforwardengineClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			if (client == null || client.options == null) return;
-			boolean wantHeadless = Fastforwardengine.CONFIG.clientHeadlessDuringWarp && Fastforwardengine.isFastForwardRunning();
+			boolean wantHeadless =
+				Fastforwardengine.CONFIG.clientHeadlessDuringWarp &&
+				Fastforwardengine.CONFIG.experimentalClientHeadless &&
+				Fastforwardengine.isFastForwardRunning();
 			try {
 				if (wantHeadless && !applied) {
 					applied = true;
@@ -25,6 +29,11 @@ public class FastforwardengineClient implements ClientModInitializer {
 					setRenderDistance(client.options, 2);
 					setOptionEnumValue(client.options, "cloud", "OFF");
 					setOptionEnumValue(client.options, "particle", "MINIMAL");
+					// Notify
+					try {
+						if (client.player != null) client.player.displayClientMessage(Component.literal("[FastForward] Headless ON"), false);
+						else client.gui.getChat().addMessage(Component.literal("[FastForward] Headless ON"));
+					} catch (Throwable ignored) {}
 				} else if (!wantHeadless && applied) {
 					applied = false;
 					// Restore
@@ -32,6 +41,11 @@ public class FastforwardengineClient implements ClientModInitializer {
 					if (savedClouds != null) setOptionEnumValue(client.options, "cloud", savedClouds);
 					if (savedParticles != null) setOptionEnumValue(client.options, "particle", savedParticles);
 					savedRenderDistance = null; savedParticles = null; savedClouds = null;
+					// Notify
+					try {
+						if (client.player != null) client.player.displayClientMessage(Component.literal("[FastForward] Headless OFF"), false);
+						else client.gui.getChat().addMessage(Component.literal("[FastForward] Headless OFF"));
+					} catch (Throwable ignored) {}
 				}
 			} catch (Throwable ignored) {}
 		});

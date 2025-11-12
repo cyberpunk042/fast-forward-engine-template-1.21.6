@@ -62,6 +62,9 @@ public final class Config {
 	@SerializedName("clientHeadlessDuringWarp")
 	public boolean clientHeadlessDuringWarp = true; // in integrated SP, reduce client render load during warp
 
+	@SerializedName("experimentalClientHeadless")
+	public boolean experimentalClientHeadless = false; // gate client headless under experimental flag
+
 	@SerializedName("warpScope")
 	public String warpScope = "all"; // all | active | dimension
 
