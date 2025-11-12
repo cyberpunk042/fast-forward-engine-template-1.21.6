@@ -22,7 +22,9 @@
 		"ServerLevelEntityCallbacksMixin",
 		"ResultSlotMixin",
 		"ServerLevelItemSpawnMixin",
-		"DropperBlockMixin"
+		"DropperBlockMixin",
+		"ServerGamePacketListenerImplMixin",
+		"MinecartHopperMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

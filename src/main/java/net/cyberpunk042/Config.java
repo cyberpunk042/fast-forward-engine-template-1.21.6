@@ -71,9 +71,17 @@ public final class Config {
 	@SerializedName("fixLagExtraTicksPerServerTick")
 	public int fixLagExtraTicksPerServerTick = 0; // number of extra server tick() invocations per server tick when fixLagEnabled
 
+	@SerializedName("fixLagSkipWhenPlayersOnline")
+	public boolean fixLagSkipWhenPlayersOnline = true; // avoid rubberband by skipping fixlag when players are online
+
 	@SerializedName("experimentalClientHeadless")
 	public boolean experimentalClientHeadless = false; // gate client headless under experimental flag
 
+	@SerializedName("disablePlayerMoveSpeedChecks")
+	public boolean disablePlayerMoveSpeedChecks = false; // ignore server 'moved too quickly' checks
+
+	@SerializedName("suppressMoveTooQuicklyLogs")
+	public boolean suppressMoveTooQuicklyLogs = true; // hide "moved too quickly!" log spam
 	@SerializedName("warpScope")
 	public String warpScope = "all"; // all | active | dimension
 
@@ -91,6 +99,18 @@ public final class Config {
 
 	@SerializedName("dropperAlwaysOn")
 	public boolean dropperAlwaysOn = false;
+
+	// Anchors keep regions fully ticking even with zero players online
+	public static final class Anchor {
+		public String id;
+		public String dimension;
+		public int chunkX;
+		public int chunkZ;
+		public int radius;
+	}
+
+	@SerializedName("anchors")
+	public java.util.List<Anchor> anchors = new java.util.ArrayList<>();
 
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 

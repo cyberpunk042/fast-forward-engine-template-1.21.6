@@ -10,6 +10,14 @@ FastForward Engine accelerates, pauses, and profiles in‑game time. It can also
 - Presets: `/fastforward config preset low|medium|high|ultra`
 - Quick runs: `/fastforward quick low|medium|high|ultra <ticks>`
 
+Preset scaling
+- Multipliers are consistent across accelerators and scale linearly by powers of two:
+  - LOW: x2
+  - MEDIUM: x4
+  - HIGH: x8
+  - ULTRA: x16
+- Applies to: hoppers, furnaces, composters, droppers, and experimental redstone passes.
+
 ## Client Headless (experimental)
 Client headless reduces client rendering/HUD costs during warps (integrated singleplayer) to shift more CPU to ticking. It temporarily applies very cheap graphics options and restores them afterward.
 
@@ -122,6 +130,39 @@ Fast-forward Minecraft server ticks while preserving farm fidelity. Designed for
 - `/fastforward config reload`: Reload `fast-forward-engine.json`.
 - `/fastforward config reset`: Reset file to defaults.
 
+### Lag fixing (Can't keep up!)
+
+- `/fastforward fixlag on|off`: Enable/disable extra internal server ticks to stay ahead of real time.
+- `/fastforward fixlag passes <count>`: Extra ticks to run each server tick (default 20 when enabled).
+- `/fastforward fixlag only-no-players <true|false>`: If true, skip lag-fixing while players are online (reduces rubber‑band risk).
+- `/fastforward fixlag status`: Show current settings.
+
+Notes:
+- Works continuously, even when no warp is running.
+- Uses the server’s own tick routine on the main thread; safe but can increase CPU load.
+- During warp, lag warnings are suppressed automatically.
+
+### Ticking Anchors (keep areas fully simulated)
+
+Keep regions ticking (entities and block entities) even with no players online.
+
+- `/fastforward anchor add here <radius>`: Create an anchor centered on your current chunk, radius 1–32 chunks.
+- `/fastforward anchor list`: List all anchors.
+- `/fastforward anchor remove <id>`: Remove one anchor by id.
+- `/fastforward anchor clear`: Remove all anchors.
+
+Notes:
+- The mod prefers Region Tickets for full simulation and gracefully falls back to force‑loading when tickets aren’t available.
+- Anchors are persisted in the config and re‑applied automatically on server tick.
+
+### Player movement helpers
+
+- `/fastforward player infinite-speed <true|false>`: Disable server move‑speed checks to avoid rubber‑banding at high speeds.
+- `/fastforward player suppress-move-log <true|false>`: Hide “moved too quickly!” spam from the console at runtime.
+- `/fastforward player status`: Show both flags.
+
+Use with care on public servers.
+
 ### Tunable groups
 
 - `/fastforward config warp aggressive <true|false>`
@@ -146,6 +187,33 @@ Fast-forward Minecraft server ticks while preserving farm fidelity. Designed for
 - Temporarily disables autosaving and optionally random ticks to reduce overhead.
 - Optional targeted accelerators for hoppers/furnaces/composters/droppers.
 - Experimental redstone passes accelerate scheduled block updates/comparators (optionally skipping entity ticks during these passes).
+
+## Engine optimizations
+
+- Redstone coalescing: duplicate scheduled block ticks are coalesced during warp to cut redundant work.
+- Save coalescing: intermediate `DimensionDataStorage` saves are deferred during warp; a single final save runs after.
+- Hopper minecart coverage:
+  - Profiling counts hopper minecart pulls/pushes by inventory deltas each tick.
+  - Push attribution prefers a hopper below (and its facing destination) or a direct container below (chest/shulker/barrel).
+  - Hopper boost (`hopperTransfersPerTick`) applies to hopper minecarts by invoking extra vanilla “suck” cycles safely.
+
+Both are automatic; no configuration needed.
+
+## Profiling counters
+
+When profiling or after quick runs, the summary includes counters:
+
+- entities+
+- smelted
+- composted
+- chest+ (items inserted)
+- crafted+ (crafter outputs only)
+- hopper pull+ / hopper push+
+- shulker+ (items inserted)
+- dispenser shots
+- dropper drops
+
+Example tail: `| entities+ 123 | smelted 456 | composted 7 | chest+ 89 | crafted+ 42 | hopper pull+ 300 | hopper push+ 295 | shulker+ 12 | dispenser shots 5 | dropper drops 3`
 
 ## Safety notes
 

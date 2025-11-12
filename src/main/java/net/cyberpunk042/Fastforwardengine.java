@@ -13,12 +13,21 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameRules;
 import net.cyberpunk042.mixin.MinecraftServerInvoker;
 import net.cyberpunk042.mixin.ServerLevelInvoker;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.filter.AbstractFilter;
+import org.apache.logging.log4j.core.Filter;
+import org.apache.logging.log4j.core.LogEvent;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -28,11 +37,30 @@ public class Fastforwardengine implements ModInitializer {
 	 public static final String MOD_ID = "fast-forward-engine";
 	 public static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(MOD_ID);
 	 public static Config CONFIG = new Config();
+	 // Ticket type used to keep regions simulated without players (cached via reflection to avoid mapping drift)
+	 private static volatile Object ANCHOR_TICKET = null;
+	 private static volatile Filter MOVE_TOO_QUICKLY_FILTER = null;
 
 	 @Override
 	 public void onInitialize() {
 		 LOGGER.info("FastForward Engine initializing");
 		 CONFIG = Config.loadOrCreate();
+
+		 // Apply runtime log filter for "moved too quickly!" spam (optional)
+		 applyMoveTooQuicklyLogFilter();
+
+		 // Re-apply anchors on server ticks if needed (first tick after boot will install them)
+		 ServerTickEvents.END_SERVER_TICK.register(server -> {
+			 if (CONFIG.anchors == null || CONFIG.anchors.isEmpty()) return;
+			 // Best-effort ensure anchors are installed; addRegionTicket is idempotent for same (type,pos,radius,argument)
+			 for (ServerLevel level : server.getAllLevels()) {
+				 String dim = level.dimension().location().toString();
+				 for (Config.Anchor a : CONFIG.anchors) {
+					 if (!dim.equals(a.dimension)) continue;
+					 installRegionTicket(level, new ChunkPos(a.chunkX, a.chunkZ), a.radius, a.id);
+				 }
+			 }
+		 });
 
 		 // Register /fastforward commands
 		 CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
@@ -56,27 +84,7 @@ public class Fastforwardengine implements ModInitializer {
 					 }))
 					 .then(Commands.literal("preset")
 						 .then(Commands.literal("low").executes(ctx -> {
-							 // Conservative defaults
-							 CONFIG.batchSizePerServerTick = 200;
-							 CONFIG.randomTickSpeedOverride = null;
-							 CONFIG.experimentalAggressiveWarp = false;
-							 CONFIG.experimentalMaxWarpMillisPerServerTick = 150;
-							 CONFIG.hopperTransfersPerTick = 2;
-							 CONFIG.hopperAlwaysOn = false;
-							 CONFIG.furnaceTicksPerTick = 2;
-							 CONFIG.furnaceAlwaysOn = false;
-							 CONFIG.redstoneExperimentalEnabled = false;
-							 CONFIG.redstonePassesPerServerTick = 1;
-							 CONFIG.redstoneAlwaysOn = false;
-							 CONFIG.redstoneSkipEntityTicks = true;
-							 CONFIG.composterTicksPerTick = 2;
-							 CONFIG.composterAlwaysOn = false;
-							 CONFIG.dropperShotsPerPulse = 2;
-							 CONFIG.dropperAlwaysOn = false;
-							 CONFIG.suppressPlayerTicksDuringWarp = true;
-							 CONFIG.suppressNetworkDuringWarp = true;
-							 CONFIG.clientHeadlessDuringWarp = true;
-							 CONFIG.experimentalBackgroundPrecompute = false;
+							 applyPresetLow(CONFIG);
 							 CONFIG.save();
 							 ctx.getSource().sendSuccess(() -> Component.literal("FastForward preset applied: LOW"), false);
 							 return 1;
@@ -88,26 +96,7 @@ public class Fastforwardengine implements ModInitializer {
 							 return 1;
 						 }))
 						 .then(Commands.literal("high").executes(ctx -> {
-							 // Aggressive defaults
-							 CONFIG.batchSizePerServerTick = 2000;
-							 CONFIG.randomTickSpeedOverride = 100;
-							 CONFIG.experimentalAggressiveWarp = true;
-							 CONFIG.experimentalMaxWarpMillisPerServerTick = 800;
-							 CONFIG.hopperTransfersPerTick = 8;
-							 CONFIG.hopperAlwaysOn = true;
-							 CONFIG.furnaceTicksPerTick = 8;
-							 CONFIG.furnaceAlwaysOn = true;
-							 CONFIG.redstoneExperimentalEnabled = true;
-							 CONFIG.redstonePassesPerServerTick = 4;
-							 CONFIG.redstoneAlwaysOn = false;
-							 CONFIG.redstoneSkipEntityTicks = true;
-							 CONFIG.composterTicksPerTick = 8;
-							 CONFIG.composterAlwaysOn = true;
-							 CONFIG.dropperShotsPerPulse = 8;
-							 CONFIG.dropperAlwaysOn = true;
-							 CONFIG.suppressPlayerTicksDuringWarp = true;
-							 CONFIG.suppressNetworkDuringWarp = true;
-							 CONFIG.clientHeadlessDuringWarp = true;
+							 applyPresetHigh(CONFIG);
 							 CONFIG.save();
 							 ctx.getSource().sendSuccess(() -> Component.literal("FastForward preset applied: HIGH"), false);
 							 return 1;
@@ -338,7 +327,7 @@ public class Fastforwardengine implements ModInitializer {
 							 return 1;
 						 }))
 						 .then(Commands.literal("passes")
-							 .then(Commands.argument("count", IntegerArgumentType.integer(0, 200)).execute s(ctx -> {
+							 .then(Commands.argument("count", IntegerArgumentType.integer(0, 200)).executes(ctx -> {
 								 int count = IntegerArgumentType.getInteger(ctx, "count");
 								 CONFIG.fixLagExtraTicksPerServerTick = count;
 								 CONFIG.save();
@@ -355,6 +344,117 @@ public class Fastforwardengine implements ModInitializer {
 							 return 1;
 						 }))
 					 )
+				 )
+				 .then(Commands.literal("player")
+					 .then(Commands.literal("infinite-speed")
+						 .then(Commands.argument("value", BoolArgumentType.bool()).executes(ctx -> {
+							 boolean v = BoolArgumentType.getBool(ctx, "value");
+							 CONFIG.disablePlayerMoveSpeedChecks = v;
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("Player move-speed checks disabled: " + v), false);
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("suppress-move-log")
+						 .then(Commands.argument("value", BoolArgumentType.bool()).executes(ctx -> {
+							 boolean v = BoolArgumentType.getBool(ctx, "value");
+							 CONFIG.suppressMoveTooQuicklyLogs = v;
+							 CONFIG.save();
+							 applyMoveTooQuicklyLogFilter();
+							 ctx.getSource().sendSuccess(() -> Component.literal("Suppress 'moved too quickly!' logs: " + v), false);
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("status").executes(ctx -> {
+						 ctx.getSource().sendSuccess(() -> Component.literal("infiniteSpeed=" + CONFIG.disablePlayerMoveSpeedChecks + ", suppressMoveLogs=" + CONFIG.suppressMoveTooQuicklyLogs), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("fixlag")
+					 .then(Commands.literal("on").executes(ctx -> {
+						 CONFIG.fixLagEnabled = true;
+						 CONFIG.suppressLagWarningsDuringWarp = true;
+						 if (CONFIG.fixLagExtraTicksPerServerTick <= 0) {
+							 CONFIG.fixLagExtraTicksPerServerTick = 20;
+						 }
+						 CONFIG.save();
+						 ctx.getSource().sendSuccess(() -> Component.literal("fixlag enabled (extraTicksPerTick=" + CONFIG.fixLagExtraTicksPerServerTick + ")"), false);
+						 return 1;
+					 }))
+					 .then(Commands.literal("off").executes(ctx -> {
+						 CONFIG.fixLagEnabled = false;
+						 CONFIG.save();
+						 ctx.getSource().sendSuccess(() -> Component.literal("fixlag disabled"), false);
+						 return 1;
+					 }))
+					 .then(Commands.literal("passes")
+						 .then(Commands.argument("count", IntegerArgumentType.integer(0, 200)).executes(ctx -> {
+							 int count = IntegerArgumentType.getInteger(ctx, "count");
+							 CONFIG.fixLagExtraTicksPerServerTick = count;
+							 CONFIG.save();
+							 ctx.getSource().sendSuccess(() -> Component.literal("fixLag extra ticks per server tick set to " + count), false);
+							 return 1;
+						 }))
+					 )
+						 .then(Commands.literal("only-no-players")
+							 .then(Commands.argument("value", BoolArgumentType.bool()).executes(ctx -> {
+								 boolean v = BoolArgumentType.getBool(ctx, "value");
+								 CONFIG.fixLagSkipWhenPlayersOnline = v;
+								 CONFIG.save();
+								 ctx.getSource().sendSuccess(() -> Component.literal("fixLag skip when players online set to " + v), false);
+								 return 1;
+							 }))
+						 )
+					 .then(Commands.literal("status").executes(ctx -> {
+						 ctx.getSource().sendSuccess(() -> Component.literal(
+							 "fixLagEnabled=" + CONFIG.fixLagEnabled +
+							 ", extraTicksPerTick=" + CONFIG.fixLagExtraTicksPerServerTick +
+							 ", suppressLagWarnings=" + CONFIG.suppressLagWarningsDuringWarp +
+							 ", skipWhenPlayersOnline=" + CONFIG.fixLagSkipWhenPlayersOnline
+						 ), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("anchor")
+					 .then(Commands.literal("add")
+						 .then(Commands.literal("here")
+							 .then(Commands.argument("radius", IntegerArgumentType.integer(1, 32)).executes(ctx -> {
+								 ServerLevel level = ctx.getSource().getLevel();
+								 int radius = IntegerArgumentType.getInteger(ctx, "radius");
+								 BlockPos pos = BlockPos.containing(ctx.getSource().getPosition());
+								 int chunkX = pos.getX() >> 4;
+								 int chunkZ = pos.getZ() >> 4;
+								 String id = "anc-" + UUID.randomUUID();
+								 addAnchor(level, id, chunkX, chunkZ, radius);
+								 ctx.getSource().sendSuccess(() -> Component.literal("Anchor added id=" + id + " dim=" + level.dimension().location() + " @ " + chunkX + "," + chunkZ + " r=" + radius), false);
+								 return 1;
+							 }))
+						 )
+					 )
+					 .then(Commands.literal("remove")
+						 .then(Commands.argument("id", StringArgumentType.string()).executes(ctx -> {
+							 String id = StringArgumentType.getString(ctx, "id");
+							 boolean removed = removeAnchor(ctx.getSource().getServer(), id);
+							 ctx.getSource().sendSuccess(() -> Component.literal(removed ? ("Anchor removed id=" + id) : ("Anchor not found id=" + id)), false);
+							 return removed ? 1 : 0;
+						 }))
+					 )
+					 .then(Commands.literal("list").executes(ctx -> {
+						 List<Config.Anchor> list = CONFIG.anchors;
+						 if (list.isEmpty()) {
+							 ctx.getSource().sendSuccess(() -> Component.literal("No anchors"), false);
+						 } else {
+							 for (Config.Anchor a : list) {
+								 ctx.getSource().sendSuccess(() -> Component.literal(a.id + " | " + a.dimension + " @ " + a.chunkX + "," + a.chunkZ + " r=" + a.radius), false);
+							 }
+						 }
+						 return 1;
+					 }))
+					 .then(Commands.literal("clear").executes(ctx -> {
+						 clearAnchors(ctx.getSource().getServer());
+						 ctx.getSource().sendSuccess(() -> Component.literal("All anchors cleared"), false);
+						 return 1;
+					 }))
 				 )
 				 .then(Commands.literal("profile")
 					 .then(Commands.literal("start").executes(ctx -> {
@@ -613,7 +713,183 @@ public class Fastforwardengine implements ModInitializer {
 				 LOGGER.warn("Redstone experimental passes failed", t);
 			 }
 		 });
+
+		// Optional: global lag catch-up outside of warp. Run extra server ticks per frame.
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			if (!CONFIG.fixLagEnabled) return;
+			if (CONFIG.fixLagSkipWhenPlayersOnline) {
+				try {
+					if (!server.getPlayerList().getPlayers().isEmpty()) return;
+				} catch (Throwable ignored) {}
+			}
+			if (Engine.isRunning()) return; // do not interfere with explicit fast-forward
+			if (Engine.isPaused()) return;
+			if (Engine.fixLagActive) return;
+			final int extra = Math.max(0, CONFIG.fixLagExtraTicksPerServerTick);
+			if (extra <= 0) return;
+			Engine.fixLagActive = true;
+			try {
+				MinecraftServerInvoker inv = (MinecraftServerInvoker) (Object) server;
+				for (int n = 0; n < extra; n++) {
+					try {
+						if (CONFIG.suppressLagWarningsDuringWarp) {
+							// Advance full server clock to avoid "can't keep up" logs
+							inv.fastforwardengine$invokeTickServer(() -> false);
+						} else {
+							inv.fastforwardengine$invokeTickChildren(() -> false);
+						}
+					} catch (Throwable t) {
+						LOGGER.warn("fixlag extra tick failed", t);
+						break;
+					}
+				}
+			} finally {
+				Engine.fixLagActive = false;
+			}
+		});
 	 }
+
+	private static void applyMoveTooQuicklyLogFilter() {
+		try {
+			LoggerContext ctx = (LoggerContext) LogManager.getContext(false);
+			org.apache.logging.log4j.core.Logger root = ctx.getRootLogger();
+			if (MOVE_TOO_QUICKLY_FILTER == null) {
+				MOVE_TOO_QUICKLY_FILTER = new AbstractFilter() {
+					@Override
+					public Result filter(LogEvent event) {
+						try {
+							String msg = event.getMessage() != null ? event.getMessage().getFormattedMessage() : null;
+							if (Fastforwardengine.CONFIG.suppressMoveTooQuicklyLogs && msg != null && msg.contains("moved too quickly!")) {
+								return Result.DENY;
+							}
+						} catch (Throwable ignored) {}
+						return Result.NEUTRAL;
+					}
+				};
+				root.addFilter(MOVE_TOO_QUICKLY_FILTER);
+			}
+		} catch (Throwable ignored) {}
+	}
+
+	// ----- Anchor management -----
+	private static void addAnchor(ServerLevel level, String id, int chunkX, int chunkZ, int radius) {
+		Config.Anchor a = new Config.Anchor();
+		a.id = id;
+		a.dimension = level.dimension().location().toString();
+		a.chunkX = chunkX;
+		a.chunkZ = chunkZ;
+		a.radius = radius;
+		CONFIG.anchors.add(a);
+		CONFIG.save();
+		if (!installRegionTicket(level, new ChunkPos(chunkX, chunkZ), radius, id)) {
+			LOGGER.warn("Failed to install region ticket, falling back to forceloading chunks");
+			forceChunks(level, chunkX, chunkZ, radius, true);
+		}
+	}
+
+	private static boolean removeAnchor(MinecraftServer server, String id) {
+		Config.Anchor target = null;
+		for (Config.Anchor a : CONFIG.anchors) {
+			if (a.id != null && a.id.equals(id)) {
+				target = a;
+				break;
+			}
+		}
+		if (target == null) return false;
+		CONFIG.anchors.remove(target);
+		CONFIG.save();
+		for (ServerLevel level : server.getAllLevels()) {
+			if (!level.dimension().location().toString().equals(target.dimension)) continue;
+			if (!uninstallRegionTicket(level, new ChunkPos(target.chunkX, target.chunkZ), target.radius, target.id)) {
+				forceChunks(level, target.chunkX, target.chunkZ, target.radius, false);
+			}
+		}
+		return true;
+	}
+
+	private static void clearAnchors(MinecraftServer server) {
+		for (Config.Anchor a : CONFIG.anchors) {
+			for (ServerLevel level : server.getAllLevels()) {
+				if (!level.dimension().location().toString().equals(a.dimension)) continue;
+				if (!uninstallRegionTicket(level, new ChunkPos(a.chunkX, a.chunkZ), a.radius, a.id)) {
+					forceChunks(level, a.chunkX, a.chunkZ, a.radius, false);
+				}
+			}
+		}
+		CONFIG.anchors.clear();
+		CONFIG.save();
+	}
+
+	private static void forceChunks(ServerLevel level, int cx, int cz, int radius, boolean add) {
+		for (int dx = -radius; dx <= radius; dx++) {
+			for (int dz = -radius; dz <= radius; dz++) {
+				level.setChunkForced(cx + dx, cz + dz, add);
+			}
+		}
+	}
+
+	// Reflection helpers to add/remove region tickets that keep chunks SIMULATED (entity/blockentity ticking)
+	private static boolean installRegionTicket(ServerLevel level, ChunkPos center, int radius, String id) {
+		try {
+			if (!ensureAnchorTicket()) return false;
+			Object chunkSource = level.getChunkSource();
+			java.lang.reflect.Method add = null;
+			for (java.lang.reflect.Method m : chunkSource.getClass().getDeclaredMethods()) {
+				if ("addRegionTicket".equals(m.getName()) && m.getParameterCount() == 4) { add = m; break; }
+			}
+			if (add == null) return false;
+			add.setAccessible(true);
+			add.invoke(chunkSource, ANCHOR_TICKET, center, Integer.valueOf(radius), id);
+			return true;
+		} catch (Throwable t) {
+			return false;
+		}
+	}
+
+	private static boolean uninstallRegionTicket(ServerLevel level, ChunkPos center, int radius, String id) {
+		try {
+			if (ANCHOR_TICKET == null) return false;
+			Object chunkSource = level.getChunkSource();
+			java.lang.reflect.Method rem = null;
+			for (java.lang.reflect.Method m : chunkSource.getClass().getDeclaredMethods()) {
+				if ("removeRegionTicket".equals(m.getName()) && m.getParameterCount() == 4) { rem = m; break; }
+			}
+			if (rem == null) return false;
+			rem.setAccessible(true);
+			rem.invoke(chunkSource, ANCHOR_TICKET, center, Integer.valueOf(radius), id);
+			return true;
+		} catch (Throwable ignored) {
+			return false;
+		}
+	}
+
+	private static boolean ensureAnchorTicket() {
+		if (ANCHOR_TICKET != null) return true;
+		synchronized (Fastforwardengine.class) {
+			if (ANCHOR_TICKET != null) return true;
+			String[] names = new String[] {
+				"net.minecraft.server.level.ChunkTicketType",
+				"net.minecraft.server.level.TicketType"
+			};
+			for (String n : names) {
+				try {
+					Class<?> cls = Class.forName(n);
+					for (java.lang.reflect.Method m : cls.getDeclaredMethods()) {
+						if ("create".equals(m.getName()) && m.getParameterCount() == 2) {
+							Class<?>[] p = m.getParameterTypes();
+							if (p[0] == String.class) {
+								m.setAccessible(true);
+								ANCHOR_TICKET = m.invoke(null, "fastforward_anchor", java.util.Comparator.naturalOrder());
+								return true;
+							}
+						}
+					}
+				} catch (Throwable ignored) {}
+			}
+			return false;
+		}
+	}
+	// ----- end anchors -----
 
 	 // Public facade for mixins/utilities
 	 public static boolean isFastForwardRunning() {
@@ -680,6 +956,7 @@ public class Fastforwardengine implements ModInitializer {
 			 case "suppressLagWarningsDuringWarp" -> String.valueOf(CONFIG.suppressLagWarningsDuringWarp);
 			 case "fixLagEnabled" -> String.valueOf(CONFIG.fixLagEnabled);
 			 case "fixLagExtraTicksPerServerTick" -> String.valueOf(CONFIG.fixLagExtraTicksPerServerTick);
+			 case "fixLagSkipWhenPlayersOnline" -> String.valueOf(CONFIG.fixLagSkipWhenPlayersOnline);
 			 case "hopperTransfersPerTick" -> String.valueOf(CONFIG.hopperTransfersPerTick);
 			 case "hopperAlwaysOn" -> String.valueOf(CONFIG.hopperAlwaysOn);
 			 case "furnaceTicksPerTick" -> String.valueOf(CONFIG.furnaceTicksPerTick);
@@ -694,6 +971,8 @@ public class Fastforwardengine implements ModInitializer {
 			 case "dropperAlwaysOn" -> String.valueOf(CONFIG.dropperAlwaysOn);
 			 case "suppressPlayerTicksDuringWarp" -> String.valueOf(CONFIG.suppressPlayerTicksDuringWarp);
 			 case "experimentalClientHeadless" -> String.valueOf(CONFIG.experimentalClientHeadless);
+			 case "disablePlayerMoveSpeedChecks" -> String.valueOf(CONFIG.disablePlayerMoveSpeedChecks);
+			 case "suppressMoveTooQuicklyLogs" -> String.valueOf(CONFIG.suppressMoveTooQuicklyLogs);
 			 default -> null;
 		 };
 	 }
@@ -710,6 +989,7 @@ public class Fastforwardengine implements ModInitializer {
 				 case "experimentalMaxWarpMillisPerServerTick" -> CONFIG.experimentalMaxWarpMillisPerServerTick = Integer.parseInt(raw);
 				 case "experimentalBackgroundPrecompute" -> CONFIG.experimentalBackgroundPrecompute = Boolean.parseBoolean(raw);
 				 case "suppressLagWarningsDuringWarp" -> CONFIG.suppressLagWarningsDuringWarp = Boolean.parseBoolean(raw);
+				 case "fixLagSkipWhenPlayersOnline" -> CONFIG.fixLagSkipWhenPlayersOnline = Boolean.parseBoolean(raw);
 				 case "hopperTransfersPerTick" -> CONFIG.hopperTransfersPerTick = Integer.parseInt(raw);
 				 case "hopperAlwaysOn" -> CONFIG.hopperAlwaysOn = Boolean.parseBoolean(raw);
 				 case "furnaceTicksPerTick" -> CONFIG.furnaceTicksPerTick = Integer.parseInt(raw);
@@ -725,6 +1005,8 @@ public class Fastforwardengine implements ModInitializer {
 				 case "dropperAlwaysOn" -> CONFIG.dropperAlwaysOn = Boolean.parseBoolean(raw);
 				 case "suppressPlayerTicksDuringWarp" -> CONFIG.suppressPlayerTicksDuringWarp = Boolean.parseBoolean(raw);
 				 case "experimentalClientHeadless" -> CONFIG.experimentalClientHeadless = Boolean.parseBoolean(raw);
+				 case "disablePlayerMoveSpeedChecks" -> CONFIG.disablePlayerMoveSpeedChecks = Boolean.parseBoolean(raw);
+				 case "suppressMoveTooQuicklyLogs" -> CONFIG.suppressMoveTooQuicklyLogs = Boolean.parseBoolean(raw);
 				 case "fixLagEnabled" -> CONFIG.fixLagEnabled = Boolean.parseBoolean(raw);
 				 case "fixLagExtraTicksPerServerTick" -> CONFIG.fixLagExtraTicksPerServerTick = Integer.parseInt(raw);
 				 default -> { return false; }
@@ -760,18 +1042,18 @@ public class Fastforwardengine implements ModInitializer {
 		 c.randomTickSpeedOverride = 0; // eliminate random ticks for throughput
 		 c.experimentalAggressiveWarp = true;
 		 c.experimentalMaxWarpMillisPerServerTick = 800;
-		 c.hopperTransfersPerTick = 6;
-		 c.hopperAlwaysOn = false;
-		 c.furnaceTicksPerTick = 6;
-		 c.furnaceAlwaysOn = false;
+		 c.hopperTransfersPerTick = 8;
+		 c.hopperAlwaysOn = true;
+		 c.furnaceTicksPerTick = 8;
+		 c.furnaceAlwaysOn = true;
 		 c.redstoneExperimentalEnabled = true;
-		 c.redstonePassesPerServerTick = 2;
+		 c.redstonePassesPerServerTick = 8;
 		 c.redstoneAlwaysOn = false;
 		 c.redstoneSkipEntityTicks = true;
-		 c.composterTicksPerTick = 4;
-		 c.composterAlwaysOn = false;
-		 c.dropperShotsPerPulse = 4;
-		 c.dropperAlwaysOn = false;
+		 c.composterTicksPerTick = 8;
+		 c.composterAlwaysOn = true;
+		 c.dropperShotsPerPulse = 8;
+		 c.dropperAlwaysOn = true;
 		 c.suppressPlayerTicksDuringWarp = true;
 		 c.experimentalBackgroundPrecompute = true;
 		 c.suppressNetworkDuringWarp = true;
@@ -788,12 +1070,12 @@ public class Fastforwardengine implements ModInitializer {
 		 c.furnaceTicksPerTick = 4;
 		 c.furnaceAlwaysOn = false;
 		 c.redstoneExperimentalEnabled = true;
-		 c.redstonePassesPerServerTick = 1;
+		 c.redstonePassesPerServerTick = 4;
 		 c.redstoneAlwaysOn = false;
 		 c.redstoneSkipEntityTicks = true;
-		 c.composterTicksPerTick = 3;
+		 c.composterTicksPerTick = 4;
 		 c.composterAlwaysOn = false;
-		 c.dropperShotsPerPulse = 3;
+		 c.dropperShotsPerPulse = 4;
 		 c.dropperAlwaysOn = false;
 		 c.suppressPlayerTicksDuringWarp = true;
 		 c.experimentalBackgroundPrecompute = true;
@@ -806,17 +1088,17 @@ public class Fastforwardengine implements ModInitializer {
 		 c.randomTickSpeedOverride = 0;
 		 c.experimentalAggressiveWarp = true;
 		 c.experimentalMaxWarpMillisPerServerTick = 1200;
-		 c.hopperTransfersPerTick = 12;
+		 c.hopperTransfersPerTick = 16;
 		 c.hopperAlwaysOn = false;
-		 c.furnaceTicksPerTick = 12;
+		 c.furnaceTicksPerTick = 16;
 		 c.furnaceAlwaysOn = false;
 		 c.redstoneExperimentalEnabled = true;
-		 c.redstonePassesPerServerTick = 4;
+		 c.redstonePassesPerServerTick = 16;
 		 c.redstoneAlwaysOn = false;
 		 c.redstoneSkipEntityTicks = true;
-		 c.composterTicksPerTick = 8;
+		 c.composterTicksPerTick = 16;
 		 c.composterAlwaysOn = false;
-		 c.dropperShotsPerPulse = 8;
+		 c.dropperShotsPerPulse = 16;
 		 c.dropperAlwaysOn = false;
 		 // Keep player ticks ON to allow container GUI syncing during ultra
 		 c.suppressPlayerTicksDuringWarp = false;
@@ -859,6 +1141,7 @@ public class Fastforwardengine implements ModInitializer {
 		 static volatile long profShulkerItemsInserted = 0L;
 		 static volatile long profDispenserShots = 0L;
 		 static volatile long profDropperDrops = 0L;
+		 static volatile boolean fixLagActive = false;
 
 		 static void profilingResetCounters() {
 			 profEntitiesCreated = 0L;
