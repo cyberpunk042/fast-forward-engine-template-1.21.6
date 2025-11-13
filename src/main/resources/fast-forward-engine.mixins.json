@@ -24,7 +24,12 @@
 		"ServerLevelItemSpawnMixin",
 		"DropperBlockMixin",
 		"ServerGamePacketListenerImplMixin",
-		"MinecartHopperMixin"
+		"MinecartHopperMixin",
+		"CustomComputeMixin",
+		"MobMixin",
+		"ServerLevelPhasesMixin",
+		"ServerLevelNetworkMixin",
+		"LevelBlockEntitiesMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

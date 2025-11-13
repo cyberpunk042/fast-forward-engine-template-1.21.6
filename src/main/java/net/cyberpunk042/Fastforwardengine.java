@@ -18,6 +18,9 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameRules;
 import net.cyberpunk042.mixin.MinecraftServerInvoker;
 import net.cyberpunk042.mixin.ServerLevelInvoker;
+import net.minecraft.commands.CommandBuildContext;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.filter.AbstractFilter;
@@ -40,6 +43,8 @@ public class Fastforwardengine implements ModInitializer {
 	 // Ticket type used to keep regions simulated without players (cached via reflection to avoid mapping drift)
 	 private static volatile Object ANCHOR_TICKET = null;
 	 private static volatile Filter MOVE_TOO_QUICKLY_FILTER = null;
+	// Tick rate monitor
+	private static final TickRateMonitor TICK_RATE = new TickRateMonitor();
 
 	 @Override
 	 public void onInitialize() {
@@ -108,6 +113,20 @@ public class Fastforwardengine implements ModInitializer {
 							 return 1;
 						 }))
 					 )
+				 .then(Commands.literal("be")
+					 .then(Commands.literal("whitelist")
+						 .then(Commands.literal("on").executes(ctx -> {
+							 CustomCompute.setWhitelistBlockEntities(true);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute block entity whitelist boost: ON"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("off").executes(ctx -> {
+							 CustomCompute.setWhitelistBlockEntities(false);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute block entity whitelist boost: OFF"), false);
+							 return 1;
+						 }))
+					 )
+				 )
 					 .then(Commands.literal("show").executes(ctx -> {
 						 String json = CONFIG.toPrettyJson();
 						 for (String line : json.split("\n")) {
@@ -668,6 +687,526 @@ public class Fastforwardengine implements ModInitializer {
 			 );
 			 dispatcher.register(root);
 
+			 // /stripworld - remove non-essential entities now
+			 dispatcher.register(Commands.literal("stripworld")
+				 .requires(src -> src.hasPermission(2) || src.getServer().isSingleplayer())
+				 .executes(ctx -> {
+					 int removed = WorldMaintenance.stripWorld(ctx.getSource().getServer());
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld removed " + removed + " entities"), false);
+					 return 1;
+				 })
+				 .then(Commands.literal("here").executes(ctx -> {
+					 int removed = WorldMaintenance.stripLevel(ctx.getSource().getLevel(), true, true, true, true);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld(here) removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("mobs").executes(ctx -> {
+					 int removed = WorldMaintenance.stripWorld(ctx.getSource().getServer(), true, false, false, false);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld mobs removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("items").executes(ctx -> {
+					 int removed = WorldMaintenance.stripWorld(ctx.getSource().getServer(), false, true, false, false);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld items removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("projectiles").executes(ctx -> {
+					 int removed = WorldMaintenance.stripWorld(ctx.getSource().getServer(), false, false, true, false);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld projectiles removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("xp").executes(ctx -> {
+					 int removed = WorldMaintenance.stripWorld(ctx.getSource().getServer(), false, false, false, true);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld XP orbs removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("here-mobs").executes(ctx -> {
+					 int removed = WorldMaintenance.stripLevel(ctx.getSource().getLevel(), true, false, false, false);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld(here mobs) removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("here-items").executes(ctx -> {
+					 int removed = WorldMaintenance.stripLevel(ctx.getSource().getLevel(), false, true, false, false);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld(here items) removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("here-projectiles").executes(ctx -> {
+					 int removed = WorldMaintenance.stripLevel(ctx.getSource().getLevel(), false, false, true, false);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld(here projectiles) removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("here-xp").executes(ctx -> {
+					 int removed = WorldMaintenance.stripLevel(ctx.getSource().getLevel(), false, false, false, true);
+					 ctx.getSource().sendSuccess(() -> Component.literal("StripWorld(here xp) removed " + removed + " entities"), false);
+					 return 1;
+				 }))
+			 );
+
+			 // /ffinit [keepcleanInterval] | fast [keepcleanInterval]
+			 dispatcher.register(Commands.literal("ffinit")
+				 .requires(src -> src.hasPermission(2) || src.getServer().isSingleplayer())
+				 // Safe default: CustomCompute OFF, only KeepClean enabled
+				 .then(Commands.argument("interval", IntegerArgumentType.integer(1, 20_000)).executes(ctx -> {
+					 int interval = IntegerArgumentType.getInteger(ctx, "interval");
+					 CustomCompute.disable();
+					 WorldMaintenance.enableKeepClean(interval);
+					 ctx.getSource().sendSuccess(() -> Component.literal("ffinit: CustomCompute OFF, KeepClean ON (interval=" + interval + " ticks)."), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("fast")
+					 .then(Commands.argument("interval", IntegerArgumentType.integer(1, 20_000)).executes(ctx -> {
+						 int interval = IntegerArgumentType.getInteger(ctx, "interval");
+						 // Aggressive REPLACE setup that still allows movement
+						 CustomCompute.enable();
+						 CustomCompute.setMode(CustomCompute.Mode.REPLACE);
+						 CustomCompute.setScope(CustomCompute.Scope.ALL);
+						 CustomCompute.setScopeDimensionId(null);
+						 CustomCompute.setExtraPassesPerTick(1);
+						 CustomCompute.setBudgetMillis(0);
+						 CustomCompute.setSchedulerAdvance(true);
+						 CustomCompute.setSuppressRandomTicks(true);
+						 CustomCompute.setEntitiesMode(CustomCompute.EntitiesMode.ESSENTIAL);
+						 CustomCompute.setDisableMobAI(true);
+						 CustomCompute.setWhitelistBlockEntities(true);
+						 // Keep packets ON for chunk streaming/movement
+						 CustomCompute.setSuppressPackets(false);
+						 CustomCompute.setSuppressParticles(true);
+						 CustomCompute.setSuppressSounds(true);
+						 CustomCompute.setSkipWeather(true);
+						 CustomCompute.setSkipThunder(true);
+						 CustomCompute.setSkipPrecipitation(true);
+						 CustomCompute.setSkipRaids(true);
+						 CustomCompute.setSkipDragonFight(true);
+						 CustomCompute.setSkipDespawnChecks(true);
+						 CustomCompute.setDisableSaving(true);
+						 CustomCompute.setOnlyWhenNoPlayers(false);
+						 // Core phases ON
+						 CustomCompute.setAllowBlockTicks(true);
+						 CustomCompute.setAllowFluidTicks(true);
+						 CustomCompute.setAllowBlockEvents(true);
+						 CustomCompute.setAllowEntityTicks(true);
+						 WorldMaintenance.enableKeepClean(interval);
+						 ctx.getSource().sendSuccess(() -> Component.literal("ffinit fast: CustomCompute aggressive and KeepClean ON (interval=" + interval + " ticks)."), false);
+						 return 1;
+					 }))
+					 .executes(ctx -> {
+						 int interval = 20;
+						 CustomCompute.enable();
+						 CustomCompute.setMode(CustomCompute.Mode.REPLACE);
+						 CustomCompute.setScope(CustomCompute.Scope.ALL);
+						 CustomCompute.setScopeDimensionId(null);
+						 CustomCompute.setExtraPassesPerTick(1);
+						 CustomCompute.setBudgetMillis(0);
+						 CustomCompute.setSchedulerAdvance(true);
+						 CustomCompute.setSuppressRandomTicks(true);
+						 CustomCompute.setEntitiesMode(CustomCompute.EntitiesMode.ESSENTIAL);
+						 CustomCompute.setDisableMobAI(true);
+						 CustomCompute.setWhitelistBlockEntities(true);
+						 CustomCompute.setSuppressPackets(false);
+						 CustomCompute.setSuppressParticles(true);
+						 CustomCompute.setSuppressSounds(true);
+						 CustomCompute.setSkipWeather(true);
+						 CustomCompute.setSkipThunder(true);
+						 CustomCompute.setSkipPrecipitation(true);
+						 CustomCompute.setSkipRaids(true);
+						 CustomCompute.setSkipDragonFight(true);
+						 CustomCompute.setSkipDespawnChecks(true);
+						 CustomCompute.setDisableSaving(true);
+						 CustomCompute.setOnlyWhenNoPlayers(false);
+						 CustomCompute.setAllowBlockTicks(true);
+						 CustomCompute.setAllowFluidTicks(true);
+						 CustomCompute.setAllowBlockEvents(true);
+						 CustomCompute.setAllowEntityTicks(true);
+						 WorldMaintenance.enableKeepClean(interval);
+						 ctx.getSource().sendSuccess(() -> Component.literal("ffinit fast: CustomCompute aggressive and KeepClean ON (interval=20 ticks)."), false);
+						 return 1;
+					 })
+				 )
+				 .executes(ctx -> {
+					 // Default safe ffinit without args
+					 int interval = 20;
+					 CustomCompute.disable();
+					 WorldMaintenance.enableKeepClean(interval);
+					 ctx.getSource().sendSuccess(() -> Component.literal("ffinit: CustomCompute OFF, KeepClean ON (interval=20 ticks)."), false);
+					 return 1;
+				 })
+			 );
+
+			 // /ffreset - restore factory defaults (disable compute/keepclean and reset flags)
+			 dispatcher.register(Commands.literal("ffreset")
+				 .requires(src -> src.hasPermission(2) || src.getServer().isSingleplayer())
+				 .executes(ctx -> {
+					 // Disable compute and keepclean
+					 CustomCompute.disable();
+					 WorldMaintenance.disableKeepClean();
+					 // Reset all flags to defaults
+					 CustomCompute.setMode(CustomCompute.Mode.AUGMENT);
+					 CustomCompute.setScope(CustomCompute.Scope.ALL);
+					 CustomCompute.setScopeDimensionId(null);
+					 CustomCompute.setExtraPassesPerTick(0);
+					 CustomCompute.setBudgetMillis(0);
+					 CustomCompute.setSchedulerAdvance(false);
+					 CustomCompute.setSuppressRandomTicks(false);
+					 CustomCompute.setEntitiesMode(CustomCompute.EntitiesMode.ALL);
+					 CustomCompute.setDisableMobAI(false);
+					 CustomCompute.setWhitelistBlockEntities(false);
+					 CustomCompute.setAllowBlockTicks(true);
+					 CustomCompute.setAllowFluidTicks(true);
+					 CustomCompute.setAllowBlockEvents(true);
+					 CustomCompute.setAllowEntityTicks(true);
+					 CustomCompute.setSuppressPackets(false);
+					 CustomCompute.setSuppressParticles(false);
+					 CustomCompute.setSuppressSounds(false);
+					 CustomCompute.setSkipWeather(false);
+					 CustomCompute.setSkipThunder(false);
+					 CustomCompute.setSkipPrecipitation(false);
+					 CustomCompute.setSkipRaids(false);
+					 CustomCompute.setSkipDragonFight(false);
+					 CustomCompute.setSkipDespawnChecks(false);
+					 CustomCompute.setDisableSaving(false);
+					 CustomCompute.setOnlyWhenNoPlayers(false);
+					 ctx.getSource().sendSuccess(() -> Component.literal("ffreset: Restored factory defaults (CustomCompute OFF, KeepClean OFF)."), false);
+					 return 1;
+				 })
+			 );
+
+			 // /ffcombo - recommended settings to augment fastforward
+			 dispatcher.register(Commands.literal("ffcombo")
+				 .requires(src -> src.hasPermission(2) || src.getServer().isSingleplayer())
+				 .executes(ctx -> {
+					 CustomCompute.enable();
+					 CustomCompute.setMode(CustomCompute.Mode.AUGMENT);
+					 CustomCompute.setScope(CustomCompute.Scope.ALL);
+					 CustomCompute.setScopeDimensionId(null);
+					 CustomCompute.setExtraPassesPerTick(1);
+					 CustomCompute.setBudgetMillis(0);
+					 CustomCompute.setSchedulerAdvance(false);
+					 CustomCompute.setSuppressRandomTicks(true);
+					 CustomCompute.setEntitiesMode(CustomCompute.EntitiesMode.ALL);
+					 CustomCompute.setDisableMobAI(false);
+					 CustomCompute.setWhitelistBlockEntities(true);
+					 // Ensure core phases and events are ON
+					 CustomCompute.setAllowBlockTicks(true);
+					 CustomCompute.setAllowFluidTicks(true);
+					 CustomCompute.setAllowBlockEvents(true);
+					 CustomCompute.setAllowEntityTicks(true);
+					 // Keep packets ON for smooth play
+					 CustomCompute.setSuppressPackets(false);
+					 ctx.getSource().sendSuccess(() -> Component.literal("ffcombo: CustomCompute configured to augment fastforward."), false);
+					 return 1;
+				 })
+			 );
+			 // /keepclean on|off|status [interval]
+			 dispatcher.register(Commands.literal("keepclean")
+				 .requires(src -> src.hasPermission(2) || src.getServer().isSingleplayer())
+				 .then(Commands.literal("on")
+					 .then(Commands.argument("interval", IntegerArgumentType.integer(1, 20_000)).executes(ctx -> {
+						 int interval = IntegerArgumentType.getInteger(ctx, "interval");
+						 WorldMaintenance.enableKeepClean(interval);
+						 ctx.getSource().sendSuccess(() -> Component.literal("KeepClean enabled (interval=" + interval + " ticks)"), false);
+						 return 1;
+					 }))
+					 .executes(ctx -> {
+						 WorldMaintenance.enableKeepClean(20);
+						 ctx.getSource().sendSuccess(() -> Component.literal("KeepClean enabled (interval=20 ticks)"), false);
+						 return 1;
+					 })
+				 )
+				 .then(Commands.literal("stats").executes(ctx -> {
+					 String report = TICK_RATE.report();
+					 for (String line : report.split("\n")) {
+						 ctx.getSource().sendSuccess(() -> Component.literal(line), false);
+					 }
+					 return 1;
+				 }))
+				 .then(Commands.literal("off").executes(ctx -> {
+					 WorldMaintenance.disableKeepClean();
+					 ctx.getSource().sendSuccess(() -> Component.literal("KeepClean disabled"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("grace")
+					 .then(Commands.argument("ticks", IntegerArgumentType.integer(0, 6000)).executes(ctx -> {
+						 int ticks = IntegerArgumentType.getInteger(ctx, "ticks");
+						 WorldMaintenance.setItemGraceTicks(ticks);
+						 ctx.getSource().sendSuccess(() -> Component.literal("KeepClean item grace set to " + ticks + " ticks"), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("status").executes(ctx -> {
+					 boolean en = WorldMaintenance.isKeepCleanEnabled();
+					 int iv = WorldMaintenance.getKeepCleanIntervalTicks();
+					 int gr = WorldMaintenance.getItemGraceTicks();
+					 ctx.getSource().sendSuccess(() -> Component.literal("KeepClean: " + (en ? "ON" : "OFF") + (en ? " (interval=" + iv + " ticks, itemGrace=" + gr + " ticks)" : "")), false);
+					 return 1;
+				 }))
+			 );
+
+			 // /customcompute on|off|status|mode|passes|budgetMs
+			 dispatcher.register(Commands.literal("customcompute")
+				 .requires(src -> src.hasPermission(2) || src.getServer().isSingleplayer())
+				 .then(Commands.literal("on").executes(ctx -> {
+					 CustomCompute.enable();
+					 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute enabled"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("off").executes(ctx -> {
+					 CustomCompute.disable();
+					 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute disabled"), false);
+					 return 1;
+				 }))
+				 .then(Commands.literal("mode")
+					 .then(Commands.literal("augment").executes(ctx -> {
+						 CustomCompute.setMode(CustomCompute.Mode.AUGMENT);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute mode set to AUGMENT"), false);
+						 return 1;
+					 }))
+					 .then(Commands.literal("replace").executes(ctx -> {
+						 CustomCompute.setMode(CustomCompute.Mode.REPLACE);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute mode set to REPLACE"), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("passes")
+					 .then(Commands.argument("count", IntegerArgumentType.integer(0, 200)).executes(ctx -> {
+						 int count = IntegerArgumentType.getInteger(ctx, "count");
+						 CustomCompute.setExtraPassesPerTick(count);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute extra passes per tick set to " + count), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("budgetMs")
+					 .then(Commands.argument("ms", IntegerArgumentType.integer(0, 10_000)).executes(ctx -> {
+						 int ms = IntegerArgumentType.getInteger(ctx, "ms");
+						 CustomCompute.setBudgetMillis(ms);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute budget set to " + ms + " ms"), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("onlyNoPlayers")
+					 .then(Commands.argument("value", BoolArgumentType.bool()).executes(ctx -> {
+						 boolean v = BoolArgumentType.getBool(ctx, "value");
+						 CustomCompute.setOnlyWhenNoPlayers(v);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute onlyWhenNoPlayers set to " + v), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("scope")
+					 .then(Commands.literal("all").executes(ctx -> {
+						 CustomCompute.setScope(CustomCompute.Scope.ALL);
+						 CustomCompute.setScopeDimensionId(null);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute scope set to ALL"), false);
+						 return 1;
+					 }))
+					 .then(Commands.literal("active").executes(ctx -> {
+						 String id = ctx.getSource().getLevel().dimension().location().toString();
+						 CustomCompute.setScope(CustomCompute.Scope.DIMENSION);
+						 CustomCompute.setScopeDimensionId(id);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute scope set to ACTIVE dimension " + id), false);
+						 return 1;
+					 }))
+					 .then(Commands.literal("dimension")
+						 .then(Commands.argument("id", StringArgumentType.word()).executes(ctx -> {
+							 String id = StringArgumentType.getString(ctx, "id");
+							 CustomCompute.setScope(CustomCompute.Scope.DIMENSION);
+							 CustomCompute.setScopeDimensionId(id);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute scope set to DIMENSION " + id), false);
+							 return 1;
+						 }))
+					 )
+				 )
+				 .then(Commands.literal("scheduler")
+					 .then(Commands.literal("advance")
+						 .then(Commands.argument("value", BoolArgumentType.bool()).executes(ctx -> {
+							 boolean v = BoolArgumentType.getBool(ctx, "value");
+							 CustomCompute.setSchedulerAdvance(v);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute schedulerAdvance set to " + v), false);
+							 return 1;
+						 }))
+					 )
+				 )
+				 .then(Commands.literal("random")
+					 .then(Commands.literal("off").executes(ctx -> {
+						 CustomCompute.setSuppressRandomTicks(true);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute random ticks: OFF (suppressed)"), false);
+						 return 1;
+					 }))
+					 .then(Commands.literal("on").executes(ctx -> {
+						 CustomCompute.setSuppressRandomTicks(false);
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute random ticks: ON (restored)"), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("net")
+					 .then(Commands.literal("packets")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSuppressPackets(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute packets: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSuppressPackets(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute packets: OFF"), false); return 1; }))
+					 )
+					 .then(Commands.literal("particles")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSuppressParticles(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute particles: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSuppressParticles(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute particles: OFF"), false); return 1; }))
+					 )
+					 .then(Commands.literal("sounds")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSuppressSounds(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute sounds: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSuppressSounds(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute sounds: OFF"), false); return 1; }))
+					 )
+				 )
+				 .then(Commands.literal("world")
+					 .then(Commands.literal("weather")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSkipWeather(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute weather: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSkipWeather(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute weather: OFF"), false); return 1; }))
+					 )
+					 .then(Commands.literal("thunder")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSkipThunder(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute thunder: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSkipThunder(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute thunder: OFF"), false); return 1; }))
+					 )
+					 .then(Commands.literal("precip")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSkipPrecipitation(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute precipitation: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSkipPrecipitation(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute precipitation: OFF"), false); return 1; }))
+					 )
+					 .then(Commands.literal("raids")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSkipRaids(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute raids: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSkipRaids(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute raids: OFF"), false); return 1; }))
+					 )
+					 .then(Commands.literal("dragon")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSkipDragonFight(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute dragon fight: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSkipDragonFight(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute dragon fight: OFF"), false); return 1; }))
+					 )
+					 .then(Commands.literal("despawn")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setSkipDespawnChecks(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute despawn checks: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setSkipDespawnChecks(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute despawn checks: OFF"), false); return 1; }))
+					 )
+				 )
+				 .then(Commands.literal("be")
+					 .then(Commands.literal("whitelist")
+						 .then(Commands.literal("on").executes(ctx -> {
+							 CustomCompute.setWhitelistBlockEntities(true);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute BE whitelist boost: ON"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("off").executes(ctx -> {
+							 CustomCompute.setWhitelistBlockEntities(false);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute BE whitelist boost: OFF"), false);
+							 return 1;
+						 }))
+					 )
+				 )
+				 .then(Commands.literal("io")
+					 .then(Commands.literal("saving")
+						 .then(Commands.literal("on").executes(ctx -> { CustomCompute.setDisableSaving(false); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute saving: ON"), false); return 1; }))
+						 .then(Commands.literal("off").executes(ctx -> { CustomCompute.setDisableSaving(true); ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute saving: OFF (may reduce IO)"), false); return 1; }))
+					 )
+				 )
+				 .then(Commands.literal("stats")
+					 .then(Commands.literal("reset").executes(ctx -> {
+						 CustomCompute.resetStats();
+						 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute stats reset"), false);
+						 return 1;
+					 }))
+				 )
+				 .then(Commands.literal("phase")
+					 .then(Commands.literal("blockTicks")
+						 .then(Commands.literal("on").executes(ctx -> {
+							 CustomCompute.setAllowBlockTicks(true);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute blockTicks: ON"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("off").executes(ctx -> {
+							 CustomCompute.setAllowBlockTicks(false);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute blockTicks: OFF"), false);
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("fluidTicks")
+						 .then(Commands.literal("on").executes(ctx -> {
+							 CustomCompute.setAllowFluidTicks(true);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute fluidTicks: ON"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("off").executes(ctx -> {
+							 CustomCompute.setAllowFluidTicks(false);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute fluidTicks: OFF"), false);
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("blockEvents")
+						 .then(Commands.literal("on").executes(ctx -> {
+							 CustomCompute.setAllowBlockEvents(true);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute blockEvents: ON"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("off").executes(ctx -> {
+							 CustomCompute.setAllowBlockEvents(false);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute blockEvents: OFF"), false);
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("entities")
+						 .then(Commands.literal("on").executes(ctx -> {
+							 CustomCompute.setAllowEntityTicks(true);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute entity ticks: ON"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("off").executes(ctx -> {
+							 CustomCompute.setAllowEntityTicks(false);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute entity ticks: OFF"), false);
+							 return 1;
+						 }))
+					 )
+				 )
+				 .then(Commands.literal("entities")
+					 .then(Commands.literal("mode")
+						 .then(Commands.literal("all").executes(ctx -> {
+							 CustomCompute.setEntitiesMode(CustomCompute.EntitiesMode.ALL);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute entities mode set to ALL"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("essential").executes(ctx -> {
+							 CustomCompute.setEntitiesMode(CustomCompute.EntitiesMode.ESSENTIAL);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute entities mode set to ESSENTIAL"), false);
+							 return 1;
+						 }))
+						 .then(Commands.literal("players-only").executes(ctx -> {
+							 CustomCompute.setEntitiesMode(CustomCompute.EntitiesMode.PLAYERS_ONLY);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute entities mode set to PLAYERS_ONLY"), false);
+							 return 1;
+						 }))
+					 )
+					 .then(Commands.literal("ai")
+						 .then(Commands.argument("disable", BoolArgumentType.bool()).executes(ctx -> {
+							 boolean v = BoolArgumentType.getBool(ctx, "disable");
+							 CustomCompute.setDisableMobAI(v);
+							 ctx.getSource().sendSuccess(() -> Component.literal("CustomCompute disableMobAI set to " + v), false);
+							 return 1;
+						 }))
+					 )
+				 )
+				 .then(Commands.literal("status").executes(ctx -> {
+					 String s = "CustomCompute: " + (CustomCompute.isEnabled() ? "ON" : "OFF")
+						 + ", mode=" + CustomCompute.getMode()
+						 + ", passes=" + CustomCompute.getExtraPassesPerTick()
+						 + ", budgetMs=" + CustomCompute.getBudgetMillis()
+						 + ", onlyNoPlayers=" + CustomCompute.isOnlyWhenNoPlayers()
+						 + ", scope=" + CustomCompute.getScope() + (CustomCompute.getScope() == CustomCompute.Scope.DIMENSION ? "@" + CustomCompute.getScopeDimensionId() : "")
+						 + ", schedulerAdvance=" + CustomCompute.isSchedulerAdvance()
+						 + ", entitiesMode=" + CustomCompute.getEntitiesMode()
+						 + ", disableMobAI=" + CustomCompute.isDisableMobAI()
+						 + ", suppressRandomTicks=" + CustomCompute.isSuppressRandomTicks()
+						 + ", whitelistBEs=" + CustomCompute.isWhitelistBlockEntities()
+						 + " | net packets=" + !CustomCompute.isSuppressPackets() + ", particles=" + !CustomCompute.isSuppressParticles() + ", sounds=" + !CustomCompute.isSuppressSounds()
+						 + " | world weather=" + !CustomCompute.isSkipWeather() + ", thunder=" + !CustomCompute.isSkipThunder() + ", precip=" + !CustomCompute.isSkipPrecipitation() + ", raids=" + !CustomCompute.isSkipRaids() + ", dragon=" + !CustomCompute.isSkipDragonFight() + ", despawnChecks=" + !CustomCompute.isSkipDespawnChecks()
+						 + " | phases blockTicks=" + CustomCompute.isAllowBlockTicks()
+						 + ", fluidTicks=" + CustomCompute.isAllowFluidTicks()
+						 + ", blockEvents=" + CustomCompute.isAllowBlockEvents()
+						 + ", entityTicks=" + CustomCompute.isAllowEntityTicks()
+						 + " | stats lastRunNs=" + CustomCompute.getLastRunNanos()
+						 + ", augmentPasses=" + CustomCompute.getTotalAugmentPasses()
+						 + ", replacePasses=" + CustomCompute.getTotalReplacePasses()
+						 + ", overrides=" + CustomCompute.getTotalOverrides();
+					 ctx.getSource().sendSuccess(() -> Component.literal(s), false);
+					 return 1;
+				 }))
+			 );
+
 			 // Help
 			 dispatcher.register(Commands.literal("fastforward")
 				 .then(Commands.literal("help").executes(ctx -> {
@@ -687,6 +1226,11 @@ public class Fastforwardengine implements ModInitializer {
 
 		 // Drive extra server ticks on the main thread after vanilla tick completes
 		 ServerTickEvents.END_SERVER_TICK.register(Engine::onServerTick);
+
+		 // Periodic cleanup for /keepclean
+		 ServerTickEvents.END_SERVER_TICK.register(WorldMaintenance::onServerTick);
+		 // Tick-rate: record vanilla pacing
+		 ServerTickEvents.END_SERVER_TICK.register(server -> TICK_RATE.recordVanillaTick());
 
 		 // Experimental: extra world passes when enabled and not warping
 		 ServerTickEvents.END_SERVER_TICK.register(server -> {
@@ -894,6 +1438,10 @@ public class Fastforwardengine implements ModInitializer {
 	 // Public facade for mixins/utilities
 	 public static boolean isFastForwardRunning() {
 		 return Engine.isRunning();
+	 }
+
+	 public static void recordCustomSimPasses(int passes, long wallNs) {
+		 TICK_RATE.recordSimPasses(passes, wallNs);
 	 }
 
 	 public static int hopperTransfersPerTick() {
@@ -1483,3 +2031,72 @@ public class Fastforwardengine implements ModInitializer {
 }
 
 
+// Simple tick rate monitor for vanilla TPS and custom sim passes/sec
+final class TickRateMonitor {
+	private long lastVanillaTickNs = 0L;
+	private static final int CAP = 240;
+	private final double[] tpsRing = new double[CAP];
+	private final double[] simRing = new double[CAP];
+	private int idx = 0;
+	private int count = 0;
+
+	synchronized void recordVanillaTick() {
+		long now = System.nanoTime();
+		if (lastVanillaTickNs != 0L) {
+			long dt = now - lastVanillaTickNs;
+			if (dt > 0L) {
+				double tps = 1_000_000_000.0 / dt;
+				tpsRing[idx] = tps;
+				advance();
+			}
+		}
+		lastVanillaTickNs = now;
+	}
+
+	synchronized void recordSimPasses(int passes, long wallNs) {
+		if (wallNs <= 0L || passes <= 0) return;
+		double perSec = (passes * 1_000_000_000.0) / wallNs;
+		int writeAt = (idx == 0 ? CAP - 1 : idx - 1);
+		simRing[writeAt] = perSec;
+	}
+
+	private void advance() {
+		idx = (idx + 1) % CAP;
+		if (count < CAP) count++;
+	}
+
+	synchronized void reset() {
+		lastVanillaTickNs = 0L;
+		for (int i = 0; i < CAP; i++) { tpsRing[i] = 0.0; simRing[i] = 0.0; }
+		idx = 0;
+		count = 0;
+	}
+
+	synchronized String report() {
+		int n = count;
+		if (n == 0) return "No tick samples yet.";
+		double sumT = 0, minT = Double.POSITIVE_INFINITY, maxT = 0;
+		double sumS = 0, minS = Double.POSITIVE_INFINITY, maxS = 0;
+		for (int i = 0; i < n; i++) {
+			double t = tpsRing[i];
+			if (t > 0) {
+				sumT += t;
+				if (t < minT) minT = t;
+				if (t > maxT) maxT = t;
+			}
+			double s = simRing[i];
+			if (s > 0) {
+				sumS += s;
+				if (s < minS) minS = s;
+				if (s > maxS) maxS = s;
+			}
+		}
+		double avgT = n > 0 ? (sumT / n) : 0.0;
+		double avgS = n > 0 ? (sumS / n) : 0.0;
+		return String.format(java.util.Locale.ROOT,
+			"Vanilla TPS avg=%.1f min=%.1f max=%.1f\nSim passes/sec avg=%.1f min=%.1f max=%.1f",
+			avgT, (minT==Double.POSITIVE_INFINITY?0.0:minT), maxT,
+			avgS, (minS==Double.POSITIVE_INFINITY?0.0:minS), maxS
+		);
+	}
+}

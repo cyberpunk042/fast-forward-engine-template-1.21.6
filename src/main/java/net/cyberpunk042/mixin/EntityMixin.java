@@ -15,6 +15,29 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 abstract class EntityMixin {
 	@Inject(method = "tick", at = @At("HEAD"), cancellable = true)
 	private void fastforwardengine$suppressEntityTicks(CallbackInfo ci) {
+		// CustomCompute entity gating
+		try {
+			if (net.cyberpunk042.CustomCompute.isEnabled()) {
+				var mode = net.cyberpunk042.CustomCompute.getEntitiesMode();
+				if (mode == net.cyberpunk042.CustomCompute.EntitiesMode.PLAYERS_ONLY) {
+					if (!(((Object)this) instanceof Player)) {
+						ci.cancel();
+						return;
+					}
+				} else if (mode == net.cyberpunk042.CustomCompute.EntitiesMode.ESSENTIAL) {
+					Object self = this;
+					boolean allow =
+						(self instanceof Player) ||
+						(self instanceof ItemEntity) ||
+						(self instanceof ExperienceOrb) ||
+						(self instanceof MinecartHopper);
+					if (!allow) {
+						ci.cancel();
+						return;
+					}
+				}
+			}
+		} catch (Throwable ignored) {}
 		// Hard pause: freeze everything except players
 		if (Fastforwardengine.isPaused()) {
 			if (!(((Object)this) instanceof Player)) {
